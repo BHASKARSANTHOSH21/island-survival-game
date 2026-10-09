@@ -155,7 +155,7 @@
 
     <!-- 2. LOBBY SCREEN WITH CUSTOMIZATION -->
     <div id="screenLobby" class="hidden absolute inset-0 z-40 flex flex-col items-center justify-center p-4 action-bg">
-        <div class="hud-glass max-w-4xl w-full p-6 rounded-2xl border border-red-500/40 relative grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="hud-glass max-w-4xl w-full max-h-[94vh] overflow-y-auto p-6 rounded-2xl border border-red-500/40 relative grid grid-cols-1 md:grid-cols-3 gap-6">
             
             <!-- Column 1: Live Avatar Preview -->
             <div class="flex flex-col items-center justify-center bg-slate-900/80 p-4 rounded-xl border border-slate-700">
@@ -233,6 +233,24 @@
                     </select>
                 </div>
 
+                <!-- Skill + controls guide -->
+                <div class="bg-slate-900/80 border border-slate-700 rounded p-2 text-[11px] leading-snug">
+                    <p id="skillDesc" class="text-purple-300 font-bold mb-1"></p>
+                    <p class="text-gray-400">Use: <b class="text-white">SPACE</b> (PC) or the <b class="text-white">SKILL</b> button (mobile). Recharge: 10 seconds.</p>
+                    <details class="mt-1" open>
+                        <summary class="cursor-pointer text-yellow-400 font-bold uppercase">Controls &amp; items</summary>
+                        <ul class="mt-1 space-y-0.5 text-gray-300">
+                            <li><b class="text-white">PC:</b> WASD move, mouse aim, hold left click to shoot</li>
+                            <li><b class="text-white">R</b> reload (takes time, progress bar under you)</li>
+                            <li><b class="text-white">F</b> use a medkit (+40 HP, you carry up to 5)</li>
+                            <li><b class="text-white">Spectate:</b> Q/E or arrow keys after you die</li>
+                            <li><b class="text-white">Mobile:</b> left stick move, right stick aim, FIRE / SKILL / RELOAD / MEDKIT buttons</li>
+                            <li><b class="text-white">Crates:</b> border colour = rarity. Grey common, blue rare, purple epic, gold legendary. Weapons get +15/30/50% damage; armor and medkits give more.</li>
+                            <li><b class="text-white">Storm:</b> stay inside the blue circle, it shrinks and hurts.</li>
+                        </ul>
+                    </details>
+                </div>
+
                 <!-- Squad List -->
                 <div>
                     <div class="flex justify-between items-center mb-1">
@@ -283,6 +301,10 @@
                     <div id="hudArmorBadge" class="text-xs font-bold bg-blue-600/80 text-white px-2 py-1 rounded">
                         ARMOR: <span id="hudArmorVal">0</span>
                     </div>
+                </div>
+                <div class="flex justify-between text-xs font-bold pt-1 mt-1 border-t border-slate-700/60">
+                    <span class="text-emerald-300">MEDKITS: <span id="hudMedkits" class="text-white">1</span></span>
+                    <span class="text-red-300">KILLS: <span id="hudKills" class="text-white">0</span></span>
                 </div>
             </div>
 
@@ -351,22 +373,41 @@
     <div id="modalGameEnd" class="hidden absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
         <div class="hud-glass max-w-md w-full p-8 rounded-2xl border border-yellow-500/50 text-center">
             <h2 id="endResultTitle" class="font-teko text-7xl font-extrabold text-yellow-400 uppercase tracking-widest drop-shadow-[0_0_20px_rgba(234,179,8,0.8)]">BOOYAH!</h2>
-            <p id="endResultSub" class="text-lg font-bold text-gray-300 uppercase tracking-wider mb-6">Winner Winner Chicken Dinner</p>
+            <p id="endResultSub" class="text-lg font-bold text-gray-300 uppercase tracking-wider mb-2">Winner Winner Chicken Dinner</p>
+            <p id="endStats" class="text-sm font-bold text-yellow-300 uppercase tracking-wider mb-5"></p>
+            <button id="btnKeepWatching" class="hidden w-full mb-3 bg-slate-700 hover:bg-slate-600 py-3 rounded-xl font-teko text-2xl font-bold uppercase text-white">Keep Watching</button>
             <button id="btnReturnLobby" class="w-full action-btn py-4 rounded-xl font-teko text-3xl font-bold uppercase text-white">Back To Lobby</button>
         </div>
     </div>
 
     <!-- JAVASCRIPT GAME LOGIC -->
     <script>
-        // --- FIREBASE CONFIGURATION ---
-        const firebaseConfig = { databaseURL: "https://battle-royale-default-rtdb.firebaseio.com" };
+        // --- FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBncvbn9w17XD1BnvIzpUQq4e2Pii0OoC4",
+            authDomain: "island-survival-766ca.firebaseapp.com",
+            databaseURL: "https://island-survival-766ca-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "island-survival-766ca",
+            storageBucket: "island-survival-766ca.firebasestorage.app",
+            messagingSenderId: "954371167397",
+            appId: "1:954371167397:web:cfc18d02556d6a726be94c"
+        };
         let db = null;
         try {
             if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
             db = firebase.database();
-        } catch (e) {
-            console.warn("Firebase initialize warning. Offline mode enabled.", e);
-        }
+        } catch (e) { console.warn("Firebase unavailable, offline mode.", e); }
+
+        // --- HELPERS ---
+        const toastEl = document.createElement('div');
+        toastEl.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[60] hidden bg-red-600 text-white font-bold px-4 py-2 rounded-lg shadow-lg text-sm';
+        document.body.appendChild(toastEl);
+        let toastT;
+        function toast(m) { toastEl.textContent = m; toastEl.classList.remove('hidden'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.add('hidden'), 3500); }
+        const withTimeout = (p, ms = 7000) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
+        const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+        const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 
         // --- GAME STATE ---
         const canvas = document.getElementById('gameCanvas');
@@ -376,63 +417,58 @@
         const previewCanvas = document.getElementById('previewCanvas');
         const pCtx = previewCanvas.getContext('2d');
 
-        const MAP_SIZE = 2600;
-        const ISLAND_RADIUS = 1100;
+        const MAP_SIZE = 4000;
+        const ISLAND_RADIUS = 1700;
+        const STORM_START = 1900, STORM_MIN = 150, STORM_SHRINK = 6, STORM_DPS = 6;
 
-        let localPlayerId = 'p_' + Math.random().toString(36).substr(2, 9);
-        let roomCode = null;
-        let isHost = false;
-        let myName = "Operator";
-        let myColor = "#ef4444";
-        let mySkin = "commando";
-        let myHelmet = "lvl1";
-        let myHat = "none";
-        let myPower = "healer";
-
+        const localPlayerId = 'p_' + Math.random().toString(36).substr(2, 9);
+        let roomCode = null, isHost = false, roomHost = null, roomState = 'LOBBY', roomSeed = 1;
+        let myName = "Operator", myColor = "#ef4444", mySkin = "commando", myHelmet = "lvl1", myHat = "none", myPower = "healer";
         let gameState = "LANDING";
-        let players = {};
-        let bullets = [];
-        let lootCrates = [];
-        let particles = [];
+        let players = {}, bullets = [], lootCrates = [], particles = [];
+        let busy = false, matchStartT = 0, matchPlayers = 0, lastSync = 0, lastFrame = 0, listenersOn = false;
+        const disp = {};
+        let spectating = false, specId = null;
+        const cam = { x: MAP_SIZE / 2, y: MAP_SIZE / 2 };
+        let floatTexts = [], hitMarker = 0;
+        let storm = { x: MAP_SIZE / 2, y: MAP_SIZE / 2, radius: STORM_START };
+        const online = () => !!(db && roomCode && roomCode !== 'OFFLINE');
 
-        let storm = { x: MAP_SIZE / 2, y: MAP_SIZE / 2, radius: 1200, damage: 0.3 };
-
-        // Exactly 6 Realistic Cover Obstacles
-        const OBSTACLES = [
-            { type: 'warehouse', x: 1000, y: 1000, w: 220, h: 140 },
-            { type: 'warehouse', x: 1600, y: 1100, w: 180, h: 220 },
-            { type: 'warehouse', x: 1200, y: 1600, w: 240, h: 150 },
-            { type: 'boulder', x: 850, y: 1450, r: 45 },
-            { type: 'boulder', x: 1750, y: 850, r: 50 },
-            { type: 'boulder', x: 1450, y: 1300, r: 40 }
-        ];
+        const OBSTACLES = [];
+        [[2000, 2000], [1150, 1550], [2850, 2550], [1500, 2900]].forEach(([cx, cy]) => {
+            [[-130, -90, 200, 130], [110, -80, 170, 200], [-100, 120, 220, 140], [170, 150, 160, 120]]
+                .forEach(([dx, dy, w, h]) => OBSTACLES.push({ type: 'warehouse', x: cx + dx, y: cy + dy, w, h }));
+        });
+        OBSTACLES.push({ type: 'lake', x: 2800, y: 1350, r: 170 }, { type: 'lake', x: 1250, y: 2650, r: 120 });
+        [[1000, 1100], [2600, 1900], [1900, 1250], [1700, 2500], [2300, 2950], [1000, 2300]].forEach(([x, y]) => OBSTACLES.push({ type: 'boulder', x, y, r: 45 }));
+        (() => {
+            const tr = rng(777); let n = 0, tries = 0;
+            while (n < 90 && tries++ < 3000) {
+                const a = tr() * Math.PI * 2, d = tr() * (ISLAND_RADIUS - 60);
+                const x = MAP_SIZE / 2 + Math.cos(a) * d, y = MAP_SIZE / 2 + Math.sin(a) * d;
+                if (checkObstacleCollision(x, y, 32)) continue;
+                OBSTACLES.push({ type: 'tree', x, y, r: 14 }); n++;
+            }
+        })();
 
         const WEAPONS = {
-            pistol: { name: "Pistol", damage: 18, fireRate: 280, ammoMax: 12, speed: 18, recoil: 0.05, color: "#fef08a" },
-            ak47:   { name: "AK-47", damage: 28, fireRate: 110, ammoMax: 30, speed: 22, recoil: 0.12, color: "#f97316" },
-            shotgun:{ name: "Shotgun", damage: 14, fireRate: 750, ammoMax: 8, speed: 16, recoil: 0.25, pellets: 6, color: "#ef4444" },
-            sniper: { name: "Sniper", damage: 85, fireRate: 1100, ammoMax: 5, speed: 32, recoil: 0.35, color: "#38bdf8" }
+            pistol: { name: "Pistol", damage: 18, fireRate: 280, ammoMax: 12, reloadTime: 1000, speed: 18, recoil: 0.05, color: "#fef08a" },
+            ak47:   { name: "AK-47", damage: 28, fireRate: 110, ammoMax: 30, reloadTime: 1900, speed: 22, recoil: 0.12, color: "#f97316" },
+            shotgun:{ name: "Shotgun", damage: 14, fireRate: 750, ammoMax: 8, reloadTime: 2300, speed: 16, recoil: 0.25, pellets: 6, color: "#ef4444" },
+            sniper: { name: "Sniper", damage: 85, fireRate: 1100, ammoMax: 5, reloadTime: 2600, speed: 32, recoil: 0.35, color: "#38bdf8" }
         };
 
-        let myPlayer = {
-            id: localPlayerId,
-            name: "Operator",
-            color: "#ef4444",
-            skin: "commando",
-            helmet: "lvl1",
-            hat: "none",
-            x: MAP_SIZE / 2,
-            y: MAP_SIZE / 2,
-            angle: 0,
-            hp: 100,
-            armor: 0,
-            weapon: "pistol",
-            ammo: 12,
-            isDead: false,
-            ready: false,
-            skillCooldown: 0,
-            isShooting: false,
-            lastShotTime: 0
+        const RARITY = [
+            { n: 'Common', c: '#9ca3af', m: 1, w: 0.5 }, { n: 'Rare', c: '#38bdf8', m: 1.15, w: 0.3 },
+            { n: 'Epic', c: '#a855f7', m: 1.3, w: 0.15 }, { n: 'Legendary', c: '#facc15', m: 1.5, w: 0.05 }
+        ];
+        const ARMOR_BY_RARITY = [20, 35, 50, 75];
+
+        const myPlayer = {
+            id: localPlayerId, name: "Operator", color: "#ef4444", skin: "commando", helmet: "lvl1", hat: "none",
+            x: MAP_SIZE / 2, y: MAP_SIZE / 2, angle: 0, hp: 100, armor: 0, weapon: "pistol", ammo: 12,
+            isDead: false, alive: false, ready: false, skillCooldown: 0, lastShotTime: 0,
+            dmgMult: 1, rarity: 0, medkits: 1, kills: 0, dmgDealt: 0, reloading: 0, reloadTotal: 1, diedAt: 0
         };
 
         const keys = {};
@@ -440,148 +476,254 @@
         let touchAim = { x: 0, y: 0 };
 
         // --- DOM REFERENCES ---
-        const screenLanding = document.getElementById('screenLanding');
-        const screenLobby = document.getElementById('screenLobby');
-        const screenHUD = document.getElementById('screenHUD');
-        const countdownOverlay = document.getElementById('countdownOverlay');
-        const countdownNumber = document.getElementById('countdownNumber');
-        const modalControls = document.getElementById('modalControls');
-        const modalGameEnd = document.getElementById('modalGameEnd');
+        const $ = id => document.getElementById(id);
+        const screenLanding = $('screenLanding'), screenLobby = $('screenLobby'), screenHUD = $('screenHUD');
+        const countdownOverlay = $('countdownOverlay'), countdownNumber = $('countdownNumber');
+        const modalControls = $('modalControls'), modalGameEnd = $('modalGameEnd');
+        const btnCreateRoom = $('btnCreateRoom'), btnShowJoin = $('btnShowJoin'), btnJoinRoom = $('btnJoinRoom');
+        const joinCodeGroup = $('joinCodeGroup'), inputNickname = $('inputNickname'), inputRoomCode = $('inputRoomCode');
+        const displayRoomCode = $('displayRoomCode'), btnReady = $('btnReady'), btnStartGame = $('btnStartGame');
+        const lobbyPlayerList = $('lobbyPlayerList'), playerCountBadge = $('playerCountBadge');
 
-        const btnCreateRoom = document.getElementById('btnCreateRoom');
-        const btnShowJoin = document.getElementById('btnShowJoin');
-        const btnJoinRoom = document.getElementById('btnJoinRoom');
-        const joinCodeGroup = document.getElementById('joinCodeGroup');
-        const inputNickname = document.getElementById('inputNickname');
-        const inputRoomCode = document.getElementById('inputRoomCode');
-        const displayRoomCode = document.getElementById('displayRoomCode');
-
-        const btnReady = document.getElementById('btnReady');
-        const btnStartGame = document.getElementById('btnStartGame');
-        const lobbyPlayerList = document.getElementById('lobbyPlayerList');
-        const playerCountBadge = document.getElementById('playerCountBadge');
-
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
+        // --- KILL FEED + SKILL DESCRIPTIONS ---
+        const feedEl = document.createElement('div');
+        feedEl.className = 'fixed left-4 top-48 z-30 pointer-events-none flex flex-col gap-1';
+        document.body.appendChild(feedEl);
+        function addFeed(e) {
+            const d = document.createElement('div');
+            d.className = 'hud-glass px-2 py-1 rounded text-xs font-bold';
+            d.style.borderLeft = `3px solid ${(e.k === localPlayerId || e.v === localPlayerId) ? '#facc15' : '#ef4444'}`;
+            d.textContent = e.k ? `${e.kn} > ${e.vn} [${e.w}]` : `${e.vn} died in the storm`;
+            feedEl.appendChild(d);
+            while (feedEl.children.length > 5) feedEl.firstChild.remove();
+            setTimeout(() => d.remove(), 6000);
         }
+        const SKILL_INFO = {
+            healer: 'Aura Healer: instantly restores 50 HP. Best used when you are low and out of sight.',
+            shield: 'Shield Barrier: adds 50 armor (max 100). Armor absorbs 60% of bullet damage.',
+            dash: 'Slipstream Dash: bursts you forward in your aim direction. Stops at walls. Great for escaping.',
+            fireball: 'Fire Blast: explodes 180px ahead of you. Enemies within 120px take 50 damage (ignores armor). Aim ahead of moving targets.'
+        };
+        const updateSkillDesc = () => { $('skillDesc').textContent = SKILL_INFO[myPower] || ''; };
+        $('selectSuperpower').addEventListener('change', updateSkillDesc);
+        updateSkillDesc();
+
+        // --- SPECTATE MODE ---
+        const specBar = document.createElement('div');
+        specBar.className = 'fixed top-16 left-1/2 -translate-x-1/2 z-40 hidden hud-glass px-3 py-2 rounded-xl flex items-center gap-2 text-white font-bold';
+        specBar.innerHTML = '<button id="specPrev" class="px-3 py-1 bg-slate-700 rounded">&#9664;</button>' +
+            '<span class="text-[10px] text-gray-400 uppercase">Spectating</span>' +
+            '<span id="specName" class="text-sm uppercase min-w-[100px] text-center"></span>' +
+            '<button id="specNext" class="px-3 py-1 bg-slate-700 rounded">&#9654;</button>' +
+            '<button id="specLeave" class="px-3 py-1 bg-red-600 rounded text-sm">Leave</button>';
+        document.body.appendChild(specBar);
+        const specList = () => Object.values(players).filter(p => p.id !== localPlayerId && p.alive && p.x != null);
+        function cycleSpec(dir) {
+            const l = specList();
+            if (!l.length) return;
+            const i = l.findIndex(p => p.id === specId);
+            specId = l[((i + dir) % l.length + l.length) % l.length].id;
+        }
+        function stopSpectating() { spectating = false; specId = null; specBar.classList.add('hidden'); }
+        $('specPrev').addEventListener('click', () => cycleSpec(-1));
+        $('specNext').addEventListener('click', () => cycleSpec(1));
+        $('specLeave').addEventListener('click', () => $('btnReturnLobby').click());
+        $('btnKeepWatching').addEventListener('click', () => {
+            modalGameEnd.classList.add('hidden');
+            spectating = true;
+            specBar.classList.remove('hidden');
+            cycleSpec(1);
+        });
+
+        function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
-        // Customization Events
+        // --- FIREBASE SYNC ---
+        const profile = () => ({
+            id: localPlayerId, name: myName, color: myColor, skin: mySkin, helmet: myHelmet, hat: myHat, power: myPower,
+            ready: myPlayer.ready, alive: myPlayer.alive, x: Math.round(myPlayer.x), y: Math.round(myPlayer.y),
+            angle: +myPlayer.angle.toFixed(2), hp: Math.ceil(myPlayer.hp)
+        });
+        function syncPlayerToFirebase() { if (online()) db.ref(`rooms/${roomCode}/players/${localPlayerId}`).update(profile()); }
+        function syncPos() {
+            if (!online()) return;
+            db.ref(`rooms/${roomCode}/players/${localPlayerId}`).update({
+                x: Math.round(myPlayer.x), y: Math.round(myPlayer.y), angle: +myPlayer.angle.toFixed(2),
+                hp: Math.ceil(myPlayer.hp), alive: myPlayer.alive
+            });
+        }
+
+        // --- CUSTOMIZATION EVENTS ---
         document.querySelectorAll('.color-swatch').forEach(swatch => {
             swatch.addEventListener('click', () => {
                 document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
                 swatch.classList.add('selected');
-                myColor = swatch.dataset.color;
-                myPlayer.color = myColor;
-                updatePreviewCanvas();
-                syncPlayerToFirebase();
+                myColor = swatch.dataset.color; myPlayer.color = myColor;
+                updatePreviewCanvas(); syncPlayerToFirebase();
             });
         });
+        $('selectSkin').addEventListener('change', e => { mySkin = myPlayer.skin = e.target.value; updatePreviewCanvas(); syncPlayerToFirebase(); });
+        $('selectHelmet').addEventListener('change', e => { myHelmet = myPlayer.helmet = e.target.value; updatePreviewCanvas(); syncPlayerToFirebase(); });
+        $('selectHat').addEventListener('change', e => { myHat = myPlayer.hat = e.target.value; updatePreviewCanvas(); syncPlayerToFirebase(); });
+        $('selectSuperpower').addEventListener('change', e => { myPower = e.target.value; syncPlayerToFirebase(); });
 
-        document.getElementById('selectSkin').addEventListener('change', (e) => { mySkin = e.target.value; myPlayer.skin = mySkin; updatePreviewCanvas(); syncPlayerToFirebase(); });
-        document.getElementById('selectHelmet').addEventListener('change', (e) => { myHelmet = e.target.value; myPlayer.helmet = myHelmet; updatePreviewCanvas(); syncPlayerToFirebase(); });
-        document.getElementById('selectHat').addEventListener('change', (e) => { myHat = e.target.value; myPlayer.hat = myHat; updatePreviewCanvas(); syncPlayerToFirebase(); });
-        document.getElementById('selectSuperpower').addEventListener('change', (e) => { myPower = e.target.value; syncPlayerToFirebase(); });
-
+        // --- ROOM CREATE / JOIN ---
         btnShowJoin.addEventListener('click', () => joinCodeGroup.classList.toggle('hidden'));
-        btnCreateRoom.addEventListener('click', () => {
-            myName = inputNickname.value.trim() || "Operator";
-            myPlayer.name = myName;
-            roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-            isHost = true;
-            enterLobby();
+        inputRoomCode.addEventListener('input', () => { inputRoomCode.value = inputRoomCode.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+
+        btnCreateRoom.addEventListener('click', async () => {
+            if (busy) return;
+            myName = (inputNickname.value.trim() || "Operator").slice(0, 16); myPlayer.name = myName;
+            if (!db) { roomCode = 'OFFLINE'; isHost = true; toast('Offline mode: could not load Firebase'); enterLobby(); return; }
+            busy = true;
+            try {
+                let code;
+                for (let i = 0; i < 5; i++) {
+                    code = genCode();
+                    if (!(await withTimeout(db.ref('rooms/' + code).once('value'))).exists()) break;
+                }
+                await withTimeout(db.ref('rooms/' + code).set({ state: 'LOBBY', host: localPlayerId, seed: 1, players: { [localPlayerId]: profile() } }));
+                roomCode = code; isHost = true;
+                enterLobby();
+            } catch (e) { console.error(e); toast('Cannot reach server. Check internet and Firebase database rules.'); }
+            busy = false;
         });
 
-        btnJoinRoom.addEventListener('click', () => {
-            myName = inputNickname.value.trim() || "Operator";
-            myPlayer.name = myName;
+        btnJoinRoom.addEventListener('click', async () => {
+            if (busy) return;
+            myName = (inputNickname.value.trim() || "Operator").slice(0, 16); myPlayer.name = myName;
             const code = inputRoomCode.value.trim().toUpperCase();
-            if (code.length === 6) {
-                roomCode = code;
-                isHost = false;
-                enterLobby();
-            }
+            if (code.length !== 6) { toast('Enter the 6-character room code'); return; }
+            if (!db) { toast('Offline: cannot join rooms'); return; }
+            busy = true;
+            try {
+                const r = (await withTimeout(db.ref('rooms/' + code).once('value'))).val();
+                if (!r || !r.players) toast('Room not found');
+                else if (r.state !== 'LOBBY') toast('That match has already started');
+                else if (Object.keys(r.players).length >= 12) toast('Room is full');
+                else { roomCode = code; isHost = false; enterLobby(); }
+            } catch (e) { console.error(e); toast('Cannot reach server. Check internet and Firebase database rules.'); }
+            busy = false;
         });
 
         btnReady.addEventListener('click', () => {
             myPlayer.ready = !myPlayer.ready;
             btnReady.textContent = myPlayer.ready ? "Cancel Ready" : "Set Ready";
-            btnReady.className = myPlayer.ready ? 
-                "flex-1 bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-teko text-2xl font-bold uppercase" : 
-                "flex-1 bg-amber-600 hover:bg-amber-500 py-3 rounded-xl font-teko text-2xl font-bold uppercase";
+            btnReady.className = (myPlayer.ready ? "flex-1 bg-emerald-600 hover:bg-emerald-500" : "flex-1 bg-amber-600 hover:bg-amber-500") + " py-3 rounded-xl font-teko text-2xl font-bold uppercase";
             syncPlayerToFirebase();
         });
 
-        btnStartGame.addEventListener('click', () => {
-            if (isHost && db && roomCode) db.ref(`rooms/${roomCode}/state`).set('COUNTDOWN');
-            else startCountdown();
+        btnStartGame.addEventListener('click', async () => {
+            if (!isHost) return;
+            if (!online()) { startCountdown(); return; }
+            if (roomState !== 'LOBBY') { toast('Wait for the previous match to finish'); return; }
+            if (Object.values(players).some(p => p.id !== localPlayerId && !p.ready)) { toast('Waiting for everyone to be ready'); return; }
+            const ref = db.ref(`rooms/${roomCode}`);
+            try {
+                await Promise.all([ref.child('taken').remove(), ref.child('bullets').remove(), ref.child('fx').remove()]);
+                await ref.child('seed').set(Math.floor(Math.random() * 1e9));
+                await ref.child('state').set('COUNTDOWN');
+            } catch (e) { toast('Could not start the match'); }
         });
 
-        document.getElementById('btnControlsHelp').addEventListener('click', () => modalControls.classList.remove('hidden'));
-        document.getElementById('btnLobbyHelp').addEventListener('click', () => modalControls.classList.remove('hidden'));
-        document.getElementById('btnCloseControls').addEventListener('click', () => modalControls.classList.add('hidden'));
-        document.getElementById('btnReturnLobby').addEventListener('click', () => {
+        $('btnControlsHelp').addEventListener('click', () => modalControls.classList.remove('hidden'));
+        $('btnLobbyHelp').addEventListener('click', () => modalControls.classList.remove('hidden'));
+        $('btnCloseControls').addEventListener('click', () => modalControls.classList.add('hidden'));
+        $('btnReturnLobby').addEventListener('click', () => {
+            stopSpectating();
             modalGameEnd.classList.add('hidden');
             screenHUD.classList.add('hidden');
             screenLobby.classList.remove('hidden');
             gameState = "LOBBY";
+            Object.assign(myPlayer, { hp: 100, armor: 0, weapon: 'pistol', ammo: 12, isDead: false, alive: false, ready: false, reloading: 0 });
+            feedEl.innerHTML = '';
+            btnReady.textContent = "Set Ready";
+            btnReady.className = "flex-1 bg-amber-600 hover:bg-amber-500 py-3 rounded-xl font-teko text-2xl font-bold uppercase";
+            bullets = [];
+            syncPlayerToFirebase();
+            if (online()) db.ref(`rooms/${roomCode}/state`).transaction(s => s === 'ENDED' ? 'LOBBY' : undefined);
+            else roomState = 'LOBBY';
         });
 
         function enterLobby() {
             screenLanding.classList.add('hidden');
             screenLobby.classList.remove('hidden');
             displayRoomCode.textContent = roomCode;
-            document.getElementById('previewNameBadge').textContent = myName.toUpperCase();
+            $('previewNameBadge').textContent = myName.toUpperCase();
             gameState = "LOBBY";
-
-            if (isHost) btnStartGame.classList.remove('hidden');
-            else btnStartGame.classList.add('hidden');
-
+            btnStartGame.classList.toggle('hidden', !isHost);
             updatePreviewCanvas();
 
-            if (db) {
-                const roomRef = db.ref(`rooms/${roomCode}`);
-                if (isHost) {
-                    roomRef.child('state').set('LOBBY');
-                    spawnLootCrates();
-                }
-                syncPlayerToFirebase();
-                roomRef.child('players').on('value', (snapshot) => {
-                    players = snapshot.val() || {};
-                    updateLobbyUI();
-                });
-                roomRef.child('state').on('value', (snapshot) => {
-                    if (snapshot.val() === 'COUNTDOWN' && gameState === 'LOBBY') startCountdown();
-                });
-                roomRef.child('bullets').on('child_added', (snapshot) => {
-                    const b = snapshot.val();
-                    if (b.ownerId !== localPlayerId) bullets.push(b);
-                });
-                roomRef.child(`players/${localPlayerId}`).onDisconnect().remove();
-            } else {
-                players[localPlayerId] = { id: localPlayerId, name: myName, color: myColor, skin: mySkin, helmet: myHelmet, hat: myHat, ready: true, x: myPlayer.x, y: myPlayer.y };
+            if (!online()) {
+                players[localPlayerId] = profile();
                 updateLobbyUI();
+                return;
             }
-        }
+            if (listenersOn) return;
+            listenersOn = true;
+            let wasUp = true;
+            db.ref('.info/connected').on('value', s => {
+                const up = !!s.val();
+                if (!up && wasUp) toast('Connection lost. Trying to reconnect...');
+                if (up && !wasUp) { toast('Reconnected'); syncPlayerToFirebase(); }
+                wasUp = up;
+            });
+            const ref = db.ref(`rooms/${roomCode}`);
+            ref.child(`players/${localPlayerId}`).onDisconnect().remove();
+            syncPlayerToFirebase();
 
-        function syncPlayerToFirebase() {
-            if (!db || !roomCode) return;
-            db.ref(`rooms/${roomCode}/players/${localPlayerId}`).set({
-                id: localPlayerId,
-                name: myName,
-                color: myColor,
-                skin: mySkin,
-                helmet: myHelmet,
-                hat: myHat,
-                power: myPower,
-                ready: myPlayer.ready,
-                x: myPlayer.x,
-                y: myPlayer.y,
-                angle: myPlayer.angle,
-                hp: myPlayer.hp,
-                isDead: myPlayer.isDead
+            ref.child('players').on('value', snap => {
+                players = snap.val() || {};
+                updateLobbyUI();
+                if (Object.keys(players).length === 1 && players[localPlayerId]) ref.onDisconnect().remove();
+                else ref.onDisconnect().cancel();
+                // Host migration: lowest id claims the room if the host left
+                if (roomHost && !players[roomHost] && Object.keys(players).sort()[0] === localPlayerId) ref.child('host').set(localPlayerId);
+            });
+            ref.child('host').on('value', s => {
+                roomHost = s.val(); isHost = roomHost === localPlayerId;
+                btnStartGame.classList.toggle('hidden', !isHost);
+            });
+            ref.child('seed').on('value', s => { roomSeed = s.val() || 1; });
+            ref.child('state').on('value', s => {
+                roomState = s.val() || 'LOBBY';
+                if (roomState === 'COUNTDOWN' && (gameState === 'LOBBY' || gameState === 'ENDED')) startCountdown();
+                else if (roomState === 'ENDED' && gameState === 'PLAYING') {
+                    if (!myPlayer.isDead) showEnd('BOOYAH!', 'Winner Winner Chicken Dinner');
+                    else {
+                        const w = Object.values(players).find(p => p.alive);
+                        showEnd('MATCH OVER', w ? `Winner: ${w.name}` : 'No survivors');
+                    }
+                    stopSpectating();
+                    gameState = 'ENDED';
+                }
+                if (roomState === 'ENDED' && isHost) setTimeout(() => {
+                    db.ref(`rooms/${roomCode}/state`).transaction(v => v === 'ENDED' ? 'LOBBY' : undefined);
+                }, 8000);
+            });
+            ref.child('bullets').on('child_added', s => {
+                const b = s.val();
+                if (b && b.ownerId !== localPlayerId && gameState === 'PLAYING' && Date.now() - b.t < 2500) bullets.push(b);
+            });
+            ref.child('taken').on('child_added', s => { lootCrates = lootCrates.filter(c => c.id !== s.key); });
+            ref.child('kills').on('child_added', s => {
+                const e = s.val();
+                if (!e || Date.now() - e.t > 8000) return;
+                addFeed(e);
+                if (e.k === localPlayerId) myPlayer.kills++;
+            });
+            ref.child('hits').on('child_added', s => {
+                const h = s.val();
+                if (!h || gameState !== 'PLAYING' || Date.now() - h.t > 5000 || h.s !== localPlayerId || h.v === localPlayerId) return;
+                myPlayer.dmgDealt += h.d; hitMarker = Date.now();
+                floatTexts.push({ x: h.x, y: h.y - 20, txt: '-' + h.d, c: '#facc15', life: 800 });
+            });
+            ref.child('fx').on('child_added', s => {
+                const f = s.val();
+                if (!f || f.owner === localPlayerId || gameState !== 'PLAYING' || Date.now() - f.t > 2500) return;
+                particles.push({ x: f.x, y: f.y, life: 450 });
+                if (!myPlayer.isDead && Math.hypot(myPlayer.x - f.x, myPlayer.y - f.y) < 120) hurt(50, false, { by: f.owner, wn: 'Fire Blast' });
             });
         }
 
@@ -589,138 +731,173 @@
             lobbyPlayerList.innerHTML = '';
             const pArray = Object.values(players);
             playerCountBadge.textContent = `${pArray.length} Player${pArray.length > 1 ? 's' : ''}`;
-
             pArray.forEach(p => {
                 const div = document.createElement('div');
                 div.className = "flex items-center justify-between bg-slate-800/80 px-3 py-1.5 rounded border border-slate-700";
+                const isH = p.id === roomHost || (!online() && p.id === localPlayerId);
+                const ready = p.ready || isH;
                 div.innerHTML = `
                     <div class="flex items-center gap-2">
-                        <div class="w-3 h-3 rounded-full" style="background:${p.color || '#ef4444'}"></div>
-                        <span class="font-bold text-xs text-white">${p.name || 'Operator'}</span>
+                        <div class="w-3 h-3 rounded-full" style="background:${esc(p.color || '#ef4444')}"></div>
+                        <span class="font-bold text-xs text-white">${esc(p.name || 'Operator')}${isH ? ' 👑' : ''}</span>
                     </div>
-                    <span class="text-[10px] font-bold ${p.ready ? 'text-emerald-400' : 'text-amber-400'} uppercase">
-                        ${p.ready ? 'READY' : 'NOT READY'}
-                    </span>
-                `;
+                    <span class="text-[10px] font-bold ${ready ? 'text-emerald-400' : 'text-amber-400'} uppercase">${ready ? 'READY' : 'NOT READY'}</span>`;
                 lobbyPlayerList.appendChild(div);
             });
         }
 
         function updatePreviewCanvas() {
             pCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
-            pCtx.save();
-            pCtx.translate(80, 80);
-            renderTopDownHumanSoldier(pCtx, {
-                color: myColor,
-                skin: mySkin,
-                helmet: myHelmet,
-                hat: myHat
-            });
+            pCtx.save(); pCtx.translate(80, 80);
+            renderTopDownHumanSoldier(pCtx, { color: myColor, skin: mySkin, helmet: myHelmet, hat: myHat });
             pCtx.restore();
         }
 
+        // --- MATCH FLOW ---
         function startCountdown() {
             gameState = "COUNTDOWN";
+            modalGameEnd.classList.add('hidden');
             screenLobby.classList.add('hidden');
             countdownOverlay.classList.remove('hidden');
+            spawnLootCrates();
+            bullets = []; particles = []; floatTexts = []; feedEl.innerHTML = '';
+            const ids = Object.keys(players).sort();
+            const idx = Math.max(0, ids.indexOf(localPlayerId));
+            const a = idx / Math.max(1, ids.length) * Math.PI * 2;
+            let sx = MAP_SIZE / 2 + Math.cos(a) * 1200, sy = MAP_SIZE / 2 + Math.sin(a) * 1200;
+            for (let i = 0; i < 25 && checkObstacleCollision(sx, sy, 26); i++) { sx -= Math.cos(a) * 40; sy -= Math.sin(a) * 40; }
+            Object.assign(myPlayer, {
+                x: sx, y: sy, hp: 100, armor: 0, weapon: 'pistol', ammo: 12, isDead: false, alive: true, skillCooldown: 0,
+                dmgMult: 1, rarity: 0, medkits: 1, kills: 0, dmgDealt: 0, reloading: 0, diedAt: 0
+            });
+            myPlayer.color = myColor; myPlayer.skin = mySkin; myPlayer.helmet = myHelmet; myPlayer.hat = myHat; myPlayer.name = myName;
+            players[localPlayerId] = Object.assign(players[localPlayerId] || {}, profile());
+            syncPlayerToFirebase();
 
             let count = 5;
             countdownNumber.textContent = count;
-
             const timer = setInterval(() => {
                 count--;
-                if (count > 0) {
-                    countdownNumber.textContent = count;
-                } else {
-                    clearInterval(timer);
-                    countdownOverlay.classList.add('hidden');
-                    startGameMatch();
-                }
+                if (count > 0) countdownNumber.textContent = count;
+                else { clearInterval(timer); countdownOverlay.classList.add('hidden'); startGameMatch(); }
             }, 1000);
         }
 
         function startGameMatch() {
             gameState = "PLAYING";
             screenHUD.classList.remove('hidden');
-
-            // Attach customization attributes directly to myPlayer
-            myPlayer.color = myColor;
-            myPlayer.skin = mySkin;
-            myPlayer.helmet = myHelmet;
-            myPlayer.hat = myHat;
-            myPlayer.name = myName;
-
-            if (isHost && lootCrates.length === 0) spawnLootCrates();
+            matchStartT = Date.now();
+            storm.radius = STORM_START;
+            matchPlayers = Math.max(1, Object.values(players).filter(p => p.alive).length);
+            if (isHost && online()) db.ref(`rooms/${roomCode}/state`).set('PLAYING');
         }
 
         function spawnLootCrates() {
             lootCrates = [];
-            const weaponKeys = ['ak47', 'shotgun', 'sniper'];
-            for (let i = 0; i < 22; i++) {
-                const ang = Math.random() * Math.PI * 2;
-                const dist = Math.random() * (ISLAND_RADIUS - 150);
-                lootCrates.push({
-                    id: 'crate_' + i,
-                    x: MAP_SIZE / 2 + Math.cos(ang) * dist,
-                    y: MAP_SIZE / 2 + Math.sin(ang) * dist,
-                    type: weaponKeys[Math.floor(Math.random() * weaponKeys.length)]
-                });
+            const r = rng(roomSeed), wk = ['ak47', 'shotgun', 'sniper'];
+            const pickRarity = () => { let v = r(), i = 0; for (; i < 3; i++) { v -= RARITY[i].w; if (v < 0) break; } return i; };
+            let tries = 0;
+            while (lootCrates.length < 40 && tries++ < 2000) {
+                const ang = r() * Math.PI * 2, dist = r() * (ISLAND_RADIUS - 150);
+                const x = MAP_SIZE / 2 + Math.cos(ang) * dist, y = MAP_SIZE / 2 + Math.sin(ang) * dist;
+                const k = r(), kind = k < 0.5 ? 'weapon' : k < 0.75 ? 'armor' : 'medkit';
+                const type = wk[Math.floor(r() * wk.length)], rar = pickRarity();
+                if (checkObstacleCollision(x, y, 20)) continue;
+                lootCrates.push({ id: 'c' + lootCrates.length, x, y, kind, type, rar });
             }
         }
 
+        function showEnd(title, sub, canWatch = false) {
+            $('endResultTitle').textContent = title;
+            $('endResultSub').textContent = sub;
+            $('btnKeepWatching').classList.toggle('hidden', !canWatch);
+            const secs = Math.max(0, Math.floor(((myPlayer.diedAt || Date.now()) - matchStartT) / 1000));
+            $('endStats').textContent = matchStartT ? `Kills ${myPlayer.kills} \u2022 Damage ${Math.round(myPlayer.dmgDealt)} \u2022 Survived ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '';
+            modalGameEnd.classList.remove('hidden');
+        }
+        const aliveCount = () => online() ? Object.values(players).filter(p => p.alive).length : (myPlayer.alive ? 1 : 0);
+
+        function hurt(dmg, useArmor = true, src = null) {
+            if (myPlayer.isDead || gameState !== 'PLAYING') return;
+            if (useArmor && myPlayer.armor > 0) {
+                const absorbed = Math.min(myPlayer.armor, dmg * 0.6);
+                myPlayer.armor -= absorbed; dmg -= absorbed;
+            }
+            myPlayer.hp -= dmg;
+            if (src) {
+                floatTexts.push({ x: myPlayer.x, y: myPlayer.y - 24, txt: '-' + Math.round(dmg), c: '#f87171', life: 700 });
+                if (online() && src.by !== localPlayerId) {
+                    const r = db.ref(`rooms/${roomCode}/hits`).push({ s: src.by, v: localPlayerId, d: Math.round(dmg), x: Math.round(myPlayer.x), y: Math.round(myPlayer.y), t: Date.now() });
+                    setTimeout(() => r.remove(), 2500);
+                }
+            }
+            if (myPlayer.hp <= 0) die(src);
+        }
+        function die(src) {
+            const rank = Math.max(1, aliveCount());
+            myPlayer.hp = 0; myPlayer.isDead = true; myPlayer.alive = false; myPlayer.diedAt = Date.now(); myPlayer.reloading = 0;
+            syncPos();
+            const kp = src && players[src.by];
+            const ev = { k: src ? src.by : null, kn: kp ? kp.name : 'Unknown', v: localPlayerId, vn: myName, w: src ? src.wn : 'Storm', t: Date.now() };
+            if (online()) { const r = db.ref(`rooms/${roomCode}/kills`).push(ev); setTimeout(() => r.remove(), 4000); }
+            else addFeed(ev);
+            const othersAlive = online() && Object.values(players).some(p => p.id !== localPlayerId && p.alive);
+            showEnd('ELIMINATED', matchPlayers > 1 ? `You placed #${rank}` : 'Better luck next time', othersAlive && matchPlayers > 1);
+        }
+        function checkMatchEnd() {
+            if (gameState !== 'PLAYING' || !online() || matchPlayers < 2 || Date.now() - matchStartT < 3000 || roomState !== 'PLAYING' && roomState !== 'COUNTDOWN') return;
+            if (aliveCount() <= 1) { roomState = 'ENDED'; db.ref(`rooms/${roomCode}/state`).set('ENDED'); }
+        }
+
         // --- CONTROLS INPUT ---
-        window.addEventListener('keydown', (e) => {
+        const typing = e => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName);
+        window.addEventListener('keydown', e => {
+            if (typing(e)) return;
             keys[e.key.toLowerCase()] = true;
-            if (e.key === 'r' || e.key === 'R') reloadWeapon();
-            if (e.key === 'f' || e.key === 'F') applyMedkit();
-            if (e.code === 'Space') useSuperpower();
+            if (spectating) {
+                if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'q') cycleSpec(-1);
+                if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'e') cycleSpec(1);
+            }
+            if (e.code === 'Space') { e.preventDefault(); if (document.activeElement) document.activeElement.blur(); useSuperpower(); }
+            if (e.key.toLowerCase() === 'r') reloadWeapon();
+            if (e.key.toLowerCase() === 'f') applyMedkit();
         });
-        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+        window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+        window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
         let mousePos = { x: 0, y: 0 };
-        window.addEventListener('mousemove', (e) => { mousePos.x = e.clientX; mousePos.y = e.clientY; });
-        window.addEventListener('mousedown', (e) => {
-            if (gameState === "PLAYING" && e.button === 0) shootWeapon();
-        });
+        window.addEventListener('mousemove', e => { mousePos.x = e.clientX; mousePos.y = e.clientY; });
+        window.addEventListener('mousedown', e => { if (gameState === "PLAYING" && e.button === 0 && e.target === canvas) shootWeapon(); });
+        // Hold-to-fire for desktop
+        let mouseHeld = false;
+        window.addEventListener('mousedown', e => { if (e.button === 0 && e.target === canvas) mouseHeld = true; });
+        window.addEventListener('mouseup', () => mouseHeld = false);
 
         function setupJoystick(elemId, knobId, onMove) {
-            const zone = document.getElementById(elemId);
-            const knob = document.getElementById(knobId);
-            let activeTouchId = null;
-            let center = { x: 0, y: 0 };
-
-            zone.addEventListener('touchstart', (e) => {
+            const zone = $(elemId), knob = $(knobId);
+            let activeTouchId = null, center = { x: 0, y: 0 };
+            zone.addEventListener('touchstart', e => {
                 if (activeTouchId !== null) return;
-                const touch = e.changedTouches[0];
-                activeTouchId = touch.identifier;
+                activeTouchId = e.changedTouches[0].identifier;
                 const rect = zone.getBoundingClientRect();
                 center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
             });
-
-            window.addEventListener('touchmove', (e) => {
+            window.addEventListener('touchmove', e => {
                 if (activeTouchId === null) return;
                 for (let touch of e.changedTouches) {
-                    if (touch.identifier === activeTouchId) {
-                        const dx = touch.clientX - center.x;
-                        const dy = touch.clientY - center.y;
-                        const dist = Math.hypot(dx, dy);
-                        const maxR = 40;
-                        const angle = Math.atan2(dy, dx);
-                        const clampedR = Math.min(dist, maxR);
-                        
-                        const knobX = Math.cos(angle) * clampedR;
-                        const knobY = Math.sin(angle) * clampedR;
-                        knob.style.transform = `translate(${knobX}px, ${knobY}px)`;
-                        onMove(dx / maxR, dy / maxR, angle, dist > 10);
-                    }
+                    if (touch.identifier !== activeTouchId) continue;
+                    const dx = touch.clientX - center.x, dy = touch.clientY - center.y;
+                    const dist = Math.hypot(dx, dy), maxR = 40, angle = Math.atan2(dy, dx);
+                    const r = Math.min(dist, maxR);
+                    knob.style.transform = `translate(${Math.cos(angle) * r}px, ${Math.sin(angle) * r}px)`;
+                    onMove(Math.max(-1, Math.min(1, dx / maxR)), Math.max(-1, Math.min(1, dy / maxR)), angle, dist > 10);
                 }
             });
-
-            const reset = (e) => {
+            const reset = e => {
                 for (let touch of e.changedTouches) {
                     if (touch.identifier === activeTouchId) {
                         activeTouchId = null;
-                        knob.style.transform = `translate(0px, 0px)`;
+                        knob.style.transform = 'translate(0px, 0px)';
                         onMove(0, 0, 0, false);
                     }
                 }
@@ -728,112 +905,135 @@
             window.addEventListener('touchend', reset);
             window.addEventListener('touchcancel', reset);
         }
-
         setupJoystick('leftJoystick', 'leftKnob', (nx, ny) => { touchMove.x = nx; touchMove.y = ny; });
-        setupJoystick('rightJoystick', 'rightKnob', (nx, ny, angle, active) => { if (active) myPlayer.angle = angle; });
+        setupJoystick('rightJoystick', 'rightKnob', (nx, ny, angle, active) => {
+            touchAim.x = nx; touchAim.y = ny;
+            if (active) myPlayer.angle = angle;
+        });
 
-        document.getElementById('btnMobileShoot').addEventListener('touchstart', (e) => { e.preventDefault(); shootWeapon(); });
-        document.getElementById('btnMobileSkill').addEventListener('touchstart', (e) => { e.preventDefault(); useSuperpower(); });
-        document.getElementById('btnMobileReload').addEventListener('touchstart', (e) => { e.preventDefault(); reloadWeapon(); });
-        document.getElementById('btnMobileHeal').addEventListener('touchstart', (e) => { e.preventDefault(); applyMedkit(); });
+        $('btnMobileShoot').addEventListener('touchstart', e => { e.preventDefault(); shootWeapon(); });
+        $('btnMobileSkill').addEventListener('touchstart', e => { e.preventDefault(); useSuperpower(); });
+        $('btnMobileReload').addEventListener('touchstart', e => { e.preventDefault(); reloadWeapon(); });
+        $('btnMobileHeal').addEventListener('touchstart', e => { e.preventDefault(); applyMedkit(); });
 
+        // --- COMBAT ---
         function shootWeapon() {
-            if (myPlayer.isDead || gameState !== "PLAYING") return;
-            const now = Date.now();
-            const w = WEAPONS[myPlayer.weapon];
-
+            if (myPlayer.isDead || gameState !== "PLAYING" || myPlayer.reloading) return;
+            const now = Date.now(), w = WEAPONS[myPlayer.weapon];
             if (now - myPlayer.lastShotTime < w.fireRate) return;
             if (myPlayer.ammo <= 0) { reloadWeapon(); return; }
-
             myPlayer.lastShotTime = now;
             myPlayer.ammo--;
-
-            const pellets = w.pellets || 1;
-            for (let i = 0; i < pellets; i++) {
-                const spread = w.recoil;
-                const finalAngle = myPlayer.angle + (Math.random() * spread - spread / 2);
+            for (let i = 0; i < (w.pellets || 1); i++) {
+                const finalAngle = myPlayer.angle + (Math.random() * w.recoil - w.recoil / 2);
                 const bullet = {
-                    id: Math.random().toString(36).substr(2, 9),
-                    ownerId: localPlayerId,
-                    x: myPlayer.x + Math.cos(myPlayer.angle) * 25,
-                    y: myPlayer.y + Math.sin(myPlayer.angle) * 25,
-                    vx: Math.cos(finalAngle) * w.speed,
-                    vy: Math.sin(finalAngle) * w.speed,
-                    damage: w.damage,
-                    color: w.color,
-                    life: 60
+                    id: Math.random().toString(36).substr(2, 9), ownerId: localPlayerId,
+                    x: myPlayer.x + Math.cos(myPlayer.angle) * 25, y: myPlayer.y + Math.sin(myPlayer.angle) * 25,
+                    vx: Math.cos(finalAngle) * w.speed, vy: Math.sin(finalAngle) * w.speed,
+                    damage: Math.round(w.damage * myPlayer.dmgMult), wn: w.name, color: w.color, life: 1000, t: now
                 };
-                bullets.push(bullet);
-                if (db && roomCode) db.ref(`rooms/${roomCode}/bullets`).push(bullet);
+                bullets.push({ ...bullet });
+                if (online()) {
+                    const r = db.ref(`rooms/${roomCode}/bullets`).push(bullet);
+                    setTimeout(() => r.remove(), 2000);
+                }
+            }
+            if (myPlayer.ammo <= 0) reloadWeapon();
+        }
+        function reloadWeapon() {
+            if (gameState !== 'PLAYING' || myPlayer.isDead || myPlayer.reloading) return;
+            const w = WEAPONS[myPlayer.weapon];
+            if (myPlayer.ammo >= w.ammoMax) return;
+            myPlayer.reloadTotal = w.reloadTime;
+            myPlayer.reloading = Date.now() + w.reloadTime;
+        }
+        function applyMedkit() {
+            if (gameState !== 'PLAYING' || myPlayer.isDead || myPlayer.hp >= 100 || myPlayer.medkits <= 0) return;
+            myPlayer.medkits--;
+            myPlayer.hp = Math.min(100, myPlayer.hp + 40);
+            floatTexts.push({ x: myPlayer.x, y: myPlayer.y - 24, txt: '+40', c: '#34d399', life: 800 });
+        }
+        function applyCrate(c) {
+            const R = RARITY[c.rar];
+            const say = t => floatTexts.push({ x: myPlayer.x, y: myPlayer.y - 32, txt: t, c: R.c, life: 1100 });
+            if (c.kind === 'weapon') {
+                myPlayer.weapon = c.type; myPlayer.ammo = WEAPONS[c.type].ammoMax;
+                myPlayer.dmgMult = R.m; myPlayer.rarity = c.rar; myPlayer.reloading = 0;
+                say(`${R.n} ${WEAPONS[c.type].name}`);
+            } else if (c.kind === 'armor') {
+                myPlayer.armor = Math.min(100, myPlayer.armor + ARMOR_BY_RARITY[c.rar]);
+                say(`+${ARMOR_BY_RARITY[c.rar]} ARMOR`);
+            } else {
+                myPlayer.medkits = Math.min(5, myPlayer.medkits + (c.rar >= 2 ? 2 : 1));
+                say('+MEDKIT');
             }
         }
-
-        function reloadWeapon() { myPlayer.ammo = WEAPONS[myPlayer.weapon].ammoMax; }
-        function applyMedkit() { if (myPlayer.hp < 100) myPlayer.hp = Math.min(100, myPlayer.hp + 40); }
         function useSuperpower() {
-            if (myPlayer.skillCooldown > 0) return;
-            myPlayer.skillCooldown = 600;
+            if (gameState !== 'PLAYING' || myPlayer.isDead) return;
+            if (myPlayer.skillCooldown > 0) { toast(`Skill recharging: ${Math.ceil(myPlayer.skillCooldown / 1000)}s`); return; }
+            myPlayer.skillCooldown = 10000;
             if (myPower === 'healer') myPlayer.hp = Math.min(100, myPlayer.hp + 50);
             else if (myPower === 'shield') myPlayer.armor = Math.min(100, myPlayer.armor + 50);
             else if (myPower === 'dash') {
-                myPlayer.x += Math.cos(myPlayer.angle) * 160;
-                myPlayer.y += Math.sin(myPlayer.angle) * 160;
+                for (let i = 0; i < 8; i++) {
+                    const nx = myPlayer.x + Math.cos(myPlayer.angle) * 20, ny = myPlayer.y + Math.sin(myPlayer.angle) * 20;
+                    if (checkObstacleCollision(nx, ny, 18)) break;
+                    myPlayer.x = nx; myPlayer.y = ny;
+                }
+                clampToMap();
+            } else if (myPower === 'fireball') {
+                const f = { x: myPlayer.x + Math.cos(myPlayer.angle) * 180, y: myPlayer.y + Math.sin(myPlayer.angle) * 180, owner: localPlayerId, t: Date.now() };
+                particles.push({ x: f.x, y: f.y, life: 450 });
+                if (online()) { const r = db.ref(`rooms/${roomCode}/fx`).push(f); setTimeout(() => r.remove(), 3000); }
             }
         }
 
-        function checkObstacleCollision(newX, newY, radius) {
+        function checkObstacleCollision(newX, newY, radius, bullet = false) {
             for (let obs of OBSTACLES) {
+                if (bullet && (obs.type === 'tree' || obs.type === 'lake')) continue;
                 if (obs.type === 'warehouse') {
-                    if (newX + radius > obs.x && newX - radius < obs.x + obs.w &&
-                        newY + radius > obs.y && newY - radius < obs.y + obs.h) return true;
-                } else if (obs.type === 'boulder') {
-                    if (Math.hypot(newX - obs.x, newY - obs.y) < radius + obs.r) return true;
-                }
+                    if (newX + radius > obs.x && newX - radius < obs.x + obs.w && newY + radius > obs.y && newY - radius < obs.y + obs.h) return true;
+                } else if (Math.hypot(newX - obs.x, newY - obs.y) < radius + obs.r) return true;
             }
             return false;
         }
+        function clampToMap() {
+            const c = MAP_SIZE / 2, max = ISLAND_RADIUS + 60;
+            const dx = myPlayer.x - c, dy = myPlayer.y - c, d = Math.hypot(dx, dy);
+            if (d > max) { myPlayer.x = c + dx / d * max; myPlayer.y = c + dy / d * max; }
+        }
 
-        function updatePlayerPosition() {
+        function updatePlayerPosition(dt) {
             if (myPlayer.isDead || gameState !== "PLAYING") return;
-
             let moveX = 0, moveY = 0;
             if (keys['w'] || keys['arrowup']) moveY -= 1;
             if (keys['s'] || keys['arrowdown']) moveY += 1;
             if (keys['a'] || keys['arrowleft']) moveX -= 1;
             if (keys['d'] || keys['arrowright']) moveX += 1;
+            if (touchMove.x !== 0 || touchMove.y !== 0) { moveX = touchMove.x; moveY = touchMove.y; }
 
-            if (touchMove.x !== 0 || touchMove.y !== 0) {
-                moveX = touchMove.x;
-                moveY = touchMove.y;
-            }
-
-            const speed = 4.2;
+            const speed = 4.2 * dt / 16.667;
             if (moveX !== 0 || moveY !== 0) {
-                const len = Math.hypot(moveX, moveY);
-                const normX = (moveX / len) * speed;
-                const normY = (moveY / len) * speed;
-
-                if (!checkObstacleCollision(myPlayer.x + normX, myPlayer.y, 18)) myPlayer.x += normX;
-                if (!checkObstacleCollision(myPlayer.x, myPlayer.y + normY, 18)) myPlayer.y += normY;
+                const len = Math.max(1, Math.hypot(moveX, moveY));
+                const nx = moveX / len * speed, ny = moveY / len * speed;
+                if (!checkObstacleCollision(myPlayer.x + nx, myPlayer.y, 18)) myPlayer.x += nx;
+                if (!checkObstacleCollision(myPlayer.x, myPlayer.y + ny, 18)) myPlayer.y += ny;
+                clampToMap();
             }
+            if (touchAim.x === 0 && touchAim.y === 0) myPlayer.angle = Math.atan2(mousePos.y - canvas.height / 2, mousePos.x - canvas.width / 2);
+            if (mouseHeld) shootWeapon();
 
-            if (touchAim.x === 0 && touchAim.y === 0) {
-                myPlayer.angle = Math.atan2(mousePos.y - canvas.height / 2, mousePos.x - canvas.width / 2);
-            }
-
-            // Loot Crates Pickup
-            lootCrates.forEach((crate, idx) => {
+            for (let i = lootCrates.length - 1; i >= 0; i--) {
+                const crate = lootCrates[i];
                 if (Math.hypot(myPlayer.x - crate.x, myPlayer.y - crate.y) < 35) {
-                    myPlayer.weapon = crate.type;
-                    myPlayer.ammo = WEAPONS[crate.type].ammoMax;
-                    lootCrates.splice(idx, 1);
+                    applyCrate(crate);
+                    lootCrates.splice(i, 1);
+                    if (online()) db.ref(`rooms/${roomCode}/taken/${crate.id}`).set(true);
                 }
-            });
-
-            syncPlayerToFirebase();
+            }
         }
 
-        // --- DRAW DETAILED TOP-DOWN HUMAN AVATAR WITH GUARANTEED FALLBACKS ---
+        // --- DRAW DETAILED TOP-DOWN HUMAN AVATAR ---
         function renderTopDownHumanSoldier(targetCtx, p) {
             targetCtx.save();
 
@@ -906,7 +1106,25 @@
         }
 
         // --- MAIN CANVAS RENDER LOOP ---
-        function render() {
+        function drawPlayer(p, x, y, angle, hp) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle || 0);
+            renderTopDownHumanSoldier(ctx, p);
+            ctx.restore();
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 12px Rajdhani";
+            ctx.textAlign = "center";
+            ctx.fillText(p.name || "Operator", x, y - 28);
+            ctx.fillStyle = "rgba(0,0,0,0.6)";
+            ctx.fillRect(x - 20, y - 24, 40, 5);
+            ctx.fillStyle = "#10b981";
+            ctx.fillRect(x - 20, y - 24, Math.max(0, Math.min(1, (hp ?? 100) / 100)) * 40, 5);
+        }
+
+        function render(now) {
+            const dt = Math.min(50, now - (lastFrame || now));
+            lastFrame = now;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             if (gameState !== "PLAYING" && gameState !== "ENDED") {
@@ -914,144 +1132,152 @@
                 return;
             }
 
-            updatePlayerPosition();
+            if (gameState === "PLAYING") {
+                updatePlayerPosition(dt);
+                if (myPlayer.reloading && Date.now() >= myPlayer.reloading) { myPlayer.ammo = WEAPONS[myPlayer.weapon].ammoMax; myPlayer.reloading = 0; }
+                myPlayer.skillCooldown = Math.max(0, myPlayer.skillCooldown - dt);
+                storm.radius = Math.max(STORM_MIN, STORM_START - (Date.now() - matchStartT) / 1000 * STORM_SHRINK);
+                if (!myPlayer.isDead && Math.hypot(myPlayer.x - storm.x, myPlayer.y - storm.y) > storm.radius) hurt(STORM_DPS * dt / 1000, false);
+                if (Date.now() - lastSync > 80) { lastSync = Date.now(); syncPos(); checkMatchEnd(); }
+            }
 
-            // Camera Viewport Locked Exactly to Local Player
+            if (spectating) {
+                const t = players[specId];
+                if (!t || !t.alive) cycleSpec(1);
+                const d = disp[specId];
+                cam.x += ((d ? d.x : cam.x) - cam.x) * 0.15;
+                cam.y += ((d ? d.y : cam.y) - cam.y) * 0.15;
+                $('specName').textContent = (players[specId] && players[specId].name) || '-';
+            } else { cam.x = myPlayer.x; cam.y = myPlayer.y; }
+
             ctx.save();
-            ctx.translate(canvas.width / 2 - myPlayer.x, canvas.height / 2 - myPlayer.y);
+            ctx.translate(canvas.width / 2 - cam.x, canvas.height / 2 - cam.y);
 
-            // A. Tropical Island Ground Canvas
+            // A. Island
             ctx.fillStyle = "#0284c7";
             ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
-
             ctx.fillStyle = "#fde047";
-            ctx.beginPath();
-            ctx.arc(MAP_SIZE / 2, MAP_SIZE / 2, ISLAND_RADIUS + 25, 0, Math.PI * 2);
-            ctx.fill();
-
+            ctx.beginPath(); ctx.arc(MAP_SIZE / 2, MAP_SIZE / 2, ISLAND_RADIUS + 25, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = "#15803d";
-            ctx.beginPath();
-            ctx.arc(MAP_SIZE / 2, MAP_SIZE / 2, ISLAND_RADIUS, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.beginPath(); ctx.arc(MAP_SIZE / 2, MAP_SIZE / 2, ISLAND_RADIUS, 0, Math.PI * 2); ctx.fill();
 
-            // B. Realistic Building Warehouses & Granite Boulders
+            // B. Obstacles
             OBSTACLES.forEach(obs => {
                 if (obs.type === 'warehouse') {
                     ctx.fillStyle = "#334155";
                     ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-
                     ctx.fillStyle = "#1e293b";
-                    for (let i = 0; i < obs.w; i += 20) {
-                        ctx.fillRect(obs.x + i, obs.y, 10, obs.h);
-                    }
-
-                    ctx.strokeStyle = "#94a3b8";
-                    ctx.lineWidth = 4;
+                    for (let i = 0; i < obs.w; i += 20) ctx.fillRect(obs.x + i, obs.y, 10, obs.h);
+                    ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 4;
                     ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-                } else if (obs.type === 'boulder') {
+                } else if (obs.type === 'lake') {
+                    ctx.fillStyle = "#0ea5e9";
+                    ctx.beginPath(); ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI * 2); ctx.fill();
+                    ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 5; ctx.stroke();
+                } else if (obs.type === 'tree') {
+                    ctx.fillStyle = "#166534";
+                    ctx.beginPath(); ctx.arc(obs.x, obs.y, 26, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = "#15803d";
+                    ctx.beginPath(); ctx.arc(obs.x - 4, obs.y - 4, 15, 0, Math.PI * 2); ctx.fill();
+                } else {
                     ctx.fillStyle = "#64748b";
-                    ctx.beginPath();
-                    ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.strokeStyle = "#475569";
-                    ctx.lineWidth = 4;
-                    ctx.stroke();
+                    ctx.beginPath(); ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI * 2); ctx.fill();
+                    ctx.strokeStyle = "#475569"; ctx.lineWidth = 4; ctx.stroke();
                 }
             });
 
-            // C. Realistic Wooden Supply Loot Crates
-            lootCrates.forEach(crate => {
-                ctx.fillStyle = "#854d0e";
-                ctx.fillRect(crate.x - 14, crate.y - 14, 28, 28);
-
-                ctx.strokeStyle = "#fef08a";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(crate.x - 14, crate.y - 14, 28, 28);
-
-                ctx.beginPath();
-                ctx.moveTo(crate.x - 14, crate.y - 14);
-                ctx.lineTo(crate.x + 14, crate.y + 14);
-                ctx.moveTo(crate.x + 14, crate.y - 14);
-                ctx.lineTo(crate.x - 14, crate.y + 14);
-                ctx.stroke();
-
-                ctx.fillStyle = "#fef08a";
-                ctx.font = "bold 10px Rajdhani";
-                ctx.textAlign = "center";
-                ctx.fillText(crate.type.toUpperCase(), crate.x, crate.y - 18);
+            // C. Loot crates (border colour = rarity)
+            lootCrates.forEach(c => {
+                const R = RARITY[c.rar];
+                ctx.fillStyle = c.kind === 'weapon' ? "#854d0e" : c.kind === 'armor' ? "#1d4ed8" : "#047857";
+                ctx.shadowColor = R.c; ctx.shadowBlur = c.rar >= 2 ? 16 : 0;
+                ctx.fillRect(c.x - 14, c.y - 14, 28, 28);
+                ctx.shadowBlur = 0;
+                ctx.strokeStyle = R.c; ctx.lineWidth = 3;
+                ctx.strokeRect(c.x - 14, c.y - 14, 28, 28);
+                ctx.fillStyle = "#ffffff"; ctx.font = "bold 14px Rajdhani"; ctx.textAlign = "center";
+                ctx.fillText(c.kind === 'weapon' ? 'W' : c.kind === 'armor' ? 'A' : '+', c.x, c.y + 5);
+                ctx.fillStyle = R.c; ctx.font = "bold 10px Rajdhani";
+                ctx.fillText((c.kind === 'weapon' ? c.type : c.kind).toUpperCase(), c.x, c.y - 19);
             });
 
-            // D. Shrinking Safe Zone Ring
-            ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
-            ctx.lineWidth = 6;
-            ctx.beginPath();
-            ctx.arc(storm.x, storm.y, storm.radius, 0, Math.PI * 2);
-            ctx.stroke();
+            // D. Storm ring + outside tint
+            ctx.strokeStyle = "rgba(59, 130, 246, 0.8)"; ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.arc(storm.x, storm.y, storm.radius, 0, Math.PI * 2); ctx.stroke();
 
-            // E. Tracer Bullets
-            for (let i = bullets.length - 1; i >= 0; i--) {
-                const b = bullets[i];
-                b.x += b.vx;
-                b.y += b.vy;
-                b.life--;
-
-                ctx.strokeStyle = b.color || "#fef08a";
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(b.x, b.y);
-                ctx.lineTo(b.x - b.vx * 1.5, b.y - b.vy * 1.5);
-                ctx.stroke();
-
-                if (b.ownerId !== localPlayerId && !myPlayer.isDead) {
-                    if (Math.hypot(myPlayer.x - b.x, myPlayer.y - b.y) < 22) {
-                        myPlayer.hp -= b.damage;
-                        bullets.splice(i, 1);
-                        if (myPlayer.hp <= 0) { myPlayer.isDead = true; myPlayer.hp = 0; }
-                        continue;
-                    }
-                }
-
-                if (b.life <= 0 || checkObstacleCollision(b.x, b.y, 4)) bullets.splice(i, 1);
+            // Fire blasts
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.life -= dt;
+                if (p.life <= 0) { particles.splice(i, 1); continue; }
+                ctx.fillStyle = `rgba(249,115,22,${(p.life / 450) * 0.6})`;
+                ctx.beginPath(); ctx.arc(p.x, p.y, 10 + 110 * (1 - p.life / 450), 0, Math.PI * 2); ctx.fill();
             }
 
-            // F. Render Player Characters (Guaranteed Local & Remote rendering)
-            const renderPlayerList = (db && Object.keys(players).length > 0) ? Object.values(players) : [myPlayer];
-            renderPlayerList.forEach(p => {
-                if (p.isDead) return;
+            // E. Bullets (frame-rate independent, sub-stepped)
+            const k = dt / 16.667, steps = Math.max(1, Math.ceil(k));
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                let gone = false;
+                for (let st = 0; st < steps && !gone; st++) {
+                    b.x += b.vx * k / steps; b.y += b.vy * k / steps;
+                    if (b.ownerId !== localPlayerId && !myPlayer.isDead && gameState === 'PLAYING' && Math.hypot(myPlayer.x - b.x, myPlayer.y - b.y) < 22) {
+                        hurt(b.damage, true, { by: b.ownerId, wn: b.wn }); gone = true;
+                    } else if (checkObstacleCollision(b.x, b.y, 4, true)) gone = true;
+                }
+                b.life -= dt;
+                if (gone || b.life <= 0) { bullets.splice(i, 1); continue; }
+                ctx.strokeStyle = b.color || "#fef08a"; ctx.lineWidth = 3;
+                ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 1.5, b.y - b.vy * 1.5); ctx.stroke();
+            }
 
-                const playerToDraw = (p.id === localPlayerId) ? { ...myPlayer, ...p } : p;
-                const posX = (p.id === localPlayerId) ? myPlayer.x : (p.x || myPlayer.x);
-                const posY = (p.id === localPlayerId) ? myPlayer.y : (p.y || myPlayer.y);
-                const angle = (p.id === localPlayerId) ? myPlayer.angle : (p.angle || 0);
-
-                ctx.save();
-                ctx.translate(posX, posY);
-                ctx.rotate(angle);
-
-                renderTopDownHumanSoldier(ctx, playerToDraw);
-
-                ctx.restore();
-
-                // Player Floating Name & HP Bar
-                ctx.fillStyle = "#ffffff";
-                ctx.font = "bold 12px Rajdhani";
-                ctx.textAlign = "center";
-                ctx.fillText(playerToDraw.name || "Operator", posX, posY - 28);
-
-                ctx.fillStyle = "rgba(0,0,0,0.6)";
-                ctx.fillRect(posX - 20, posY - 24, 40, 5);
-                ctx.fillStyle = "#10b981";
-                ctx.fillRect(posX - 20, posY - 24, ((playerToDraw.hp || 100) / 100) * 40, 5);
+            // F. Players: remote (smoothed) then local on top
+            Object.values(players).forEach(p => {
+                if (p.id === localPlayerId || !p.alive || p.x == null) return;
+                const d = disp[p.id] || (disp[p.id] = { x: p.x, y: p.y });
+                d.x += (p.x - d.x) * 0.25; d.y += (p.y - d.y) * 0.25;
+                drawPlayer(p, d.x, d.y, p.angle, p.hp);
             });
+            if (!myPlayer.isDead) {
+                drawPlayer(myPlayer, myPlayer.x, myPlayer.y, myPlayer.angle, myPlayer.hp);
+                if (myPlayer.reloading) {
+                    const left = Math.max(0, myPlayer.reloading - Date.now());
+                    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(myPlayer.x - 20, myPlayer.y + 26, 40, 5);
+                    ctx.fillStyle = "#fbbf24"; ctx.fillRect(myPlayer.x - 20, myPlayer.y + 26, 40 * (1 - left / myPlayer.reloadTotal), 5);
+                    ctx.font = "bold 10px Rajdhani"; ctx.textAlign = "center"; ctx.fillText("RELOADING", myPlayer.x, myPlayer.y + 42);
+                }
+            }
+            for (let i = floatTexts.length - 1; i >= 0; i--) {
+                const f = floatTexts[i];
+                f.life -= dt;
+                if (f.life <= 0) { floatTexts.splice(i, 1); continue; }
+                f.y -= dt * 0.04;
+                ctx.globalAlpha = Math.min(1, f.life / 400);
+                ctx.font = "bold 18px Rajdhani"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000";
+                ctx.strokeText(f.txt, f.x, f.y); ctx.fillStyle = f.c; ctx.fillText(f.txt, f.x, f.y);
+                ctx.globalAlpha = 1;
+            }
 
             ctx.restore();
 
-            // G. Update HUD Elements
-            document.getElementById('hudHpBar').style.width = `${Math.max(0, myPlayer.hp)}%`;
-            document.getElementById('hudHpText').textContent = `${Math.ceil(myPlayer.hp)} / 100`;
-            document.getElementById('hudWeaponName').textContent = WEAPONS[myPlayer.weapon].name;
-            document.getElementById('hudAmmoText').textContent = `${myPlayer.ammo} / ${WEAPONS[myPlayer.weapon].ammoMax}`;
-            document.getElementById('hudArmorVal').textContent = Math.ceil(myPlayer.armor);
+            if (Date.now() - hitMarker < 180) {
+                const hx = canvas.width / 2 + Math.cos(myPlayer.angle) * 42, hy = canvas.height / 2 + Math.sin(myPlayer.angle) * 42;
+                ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.beginPath();
+                ctx.moveTo(hx - 8, hy - 8); ctx.lineTo(hx + 8, hy + 8); ctx.moveTo(hx + 8, hy - 8); ctx.lineTo(hx - 8, hy + 8);
+                ctx.stroke();
+            }
+
+            // G. HUD
+            $('hudHpBar').style.width = `${Math.max(0, myPlayer.hp)}%`;
+            $('hudHpText').textContent = `${Math.ceil(Math.max(0, myPlayer.hp))} / 100`;
+            const R = RARITY[myPlayer.rarity];
+            $('hudWeaponName').textContent = `${R.n} ${WEAPONS[myPlayer.weapon].name}`;
+            $('hudWeaponName').style.color = R.c;
+            $('hudAmmoText').textContent = myPlayer.reloading ? 'RELOADING...' : `${myPlayer.ammo} / ${WEAPONS[myPlayer.weapon].ammoMax}`;
+            $('hudMedkits').textContent = myPlayer.medkits;
+            $('hudKills').textContent = myPlayer.kills;
+            $('hudArmorVal').textContent = Math.ceil(myPlayer.armor);
+            $('hudAliveCount').textContent = online() ? aliveCount() : (myPlayer.isDead ? 0 : 1);
 
             renderMinimap();
             requestAnimationFrame(render);
@@ -1060,25 +1286,23 @@
         function renderMinimap() {
             mCtx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
             const scale = minimapCanvas.width / MAP_SIZE;
-
             mCtx.fillStyle = "#15803d";
-            mCtx.beginPath();
-            mCtx.arc(MAP_SIZE / 2 * scale, MAP_SIZE / 2 * scale, ISLAND_RADIUS * scale, 0, Math.PI * 2);
-            mCtx.fill();
-
-            mCtx.strokeStyle = "#3b82f6";
-            mCtx.lineWidth = 1.5;
-            mCtx.beginPath();
-            mCtx.arc(storm.x * scale, storm.y * scale, storm.radius * scale, 0, Math.PI * 2);
-            mCtx.stroke();
-
-            Object.values(players).forEach(p => {
-                if (p.isDead) return;
-                mCtx.fillStyle = (p.id === localPlayerId) ? "#facc15" : "#ef4444";
-                mCtx.beginPath();
-                mCtx.arc(p.x * scale, p.y * scale, 2.5, 0, Math.PI * 2);
-                mCtx.fill();
+            mCtx.beginPath(); mCtx.arc(MAP_SIZE / 2 * scale, MAP_SIZE / 2 * scale, ISLAND_RADIUS * scale, 0, Math.PI * 2); mCtx.fill();
+            OBSTACLES.forEach(o => {
+                if (o.type === 'lake') { mCtx.fillStyle = "#0ea5e9"; mCtx.beginPath(); mCtx.arc(o.x * scale, o.y * scale, o.r * scale, 0, Math.PI * 2); mCtx.fill(); }
+                else if (o.type === 'warehouse') { mCtx.fillStyle = "#475569"; mCtx.fillRect(o.x * scale, o.y * scale, Math.max(2, o.w * scale), Math.max(2, o.h * scale)); }
             });
+            mCtx.strokeStyle = "#3b82f6"; mCtx.lineWidth = 1.5;
+            mCtx.beginPath(); mCtx.arc(storm.x * scale, storm.y * scale, storm.radius * scale, 0, Math.PI * 2); mCtx.stroke();
+            Object.values(players).forEach(p => {
+                if (p.id === localPlayerId || !p.alive || p.x == null) return;
+                mCtx.fillStyle = "#ef4444";
+                mCtx.beginPath(); mCtx.arc(p.x * scale, p.y * scale, 2.5, 0, Math.PI * 2); mCtx.fill();
+            });
+            if (!myPlayer.isDead) {
+                mCtx.fillStyle = "#facc15";
+                mCtx.beginPath(); mCtx.arc(myPlayer.x * scale, myPlayer.y * scale, 3, 0, Math.PI * 2); mCtx.fill();
+            }
         }
 
         requestAnimationFrame(render);
