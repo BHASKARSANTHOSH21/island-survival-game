@@ -10,6 +10,8 @@
     <!-- Firebase App & Database SDKs -->
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <!-- Three.js (3D engine) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <style>
         * {
@@ -110,7 +112,7 @@
 <body class="action-bg relative overflow-hidden select-none">
 
     <!-- CANVAS GAME AREA -->
-    <canvas id="gameCanvas" class="absolute inset-0 w-full h-full block bg-black z-0"></canvas>
+    <canvas id="gameCanvas" class="absolute inset-0 w-full h-full block z-0"></canvas>
 
     <!-- 1. FULLSCREEN LANDING MENU -->
     <div id="screenLanding" class="absolute inset-0 z-50 flex flex-col items-center justify-center p-4 action-bg">
@@ -241,12 +243,17 @@
                         <summary class="cursor-pointer text-yellow-400 font-bold uppercase">Controls &amp; items</summary>
                         <ul class="mt-1 space-y-0.5 text-gray-300">
                             <li><b class="text-white">PC:</b> WASD move, mouse aim, hold left click to shoot</li>
+                            <li><b class="text-white">V</b> switch camera: top-down, third-person, first-person (VIEW button on mobile). In 3rd/1st person click to capture the mouse, move it to turn, Esc to release.</li>
+                            <li><b class="text-white">M</b> mute or unmute sound (SOUND button at the top). Sounds from other players are placed left/right by position.</li>
                             <li><b class="text-white">R</b> reload (takes time, progress bar under you)</li>
                             <li><b class="text-white">F</b> use a medkit (+40 HP, you carry up to 5)</li>
                             <li><b class="text-white">Spectate:</b> Q/E or arrow keys after you die</li>
                             <li><b class="text-white">Mobile:</b> left stick move, right stick aim, FIRE / SKILL / RELOAD / MEDKIT buttons</li>
                             <li><b class="text-white">Crates:</b> border colour = rarity. Grey common, blue rare, purple epic, gold legendary. Weapons get +15/30/50% damage; armor and medkits give more.</li>
                             <li><b class="text-white">Storm:</b> stay inside the blue circle, it shrinks and hurts.</li>
+                            <li><b class="text-white">Ghost powers:</b> when eliminated, tap <b>Become a Ghost</b>. Spectate a survivor and cast Meteor [1], Gift [2] or Reveal [3]. Land 2 meteor hits on survivors to come back to life!</li>
+                            <li><b class="text-white">Bounty:</b> 2 kills make you WANTED (gold crown, always on the minimap). Killing a WANTED player gives +50 HP and a legendary drop.</li>
+                            <li><b class="text-white">Radar:</b> the minimap only shows enemies that are close. Aim at an enemy and your crosshair turns red.</li>
                         </ul>
                     </details>
                 </div>
@@ -375,7 +382,7 @@
             <h2 id="endResultTitle" class="font-teko text-7xl font-extrabold text-yellow-400 uppercase tracking-widest drop-shadow-[0_0_20px_rgba(234,179,8,0.8)]">BOOYAH!</h2>
             <p id="endResultSub" class="text-lg font-bold text-gray-300 uppercase tracking-wider mb-2">Winner Winner Chicken Dinner</p>
             <p id="endStats" class="text-sm font-bold text-yellow-300 uppercase tracking-wider mb-5"></p>
-            <button id="btnKeepWatching" class="hidden w-full mb-3 bg-slate-700 hover:bg-slate-600 py-3 rounded-xl font-teko text-2xl font-bold uppercase text-white">Keep Watching</button>
+            <button id="btnKeepWatching" class="hidden w-full mb-3 bg-slate-700 hover:bg-slate-600 py-3 rounded-xl font-teko text-2xl font-bold uppercase text-white">Become a Ghost</button>
             <button id="btnReturnLobby" class="w-full action-btn py-4 rounded-xl font-teko text-3xl font-bold uppercase text-white">Back To Lobby</button>
         </div>
     </div>
@@ -409,6 +416,154 @@
         function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
         const genCode = () => Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 
+        // --- SOUND ENGINE (procedural Web Audio, no audio files needed) ---
+        const SFX = (() => {
+            let ac = null, master = null, noiseBuf = null, amb = null, muted = false, lastHurt = 0;
+            try { muted = localStorage.getItem('sfxMuted') === '1'; } catch (e) {}
+            const lastT = {};
+            const muteBtn = document.createElement('button');
+            muteBtn.className = 'fixed top-2 z-[45] hud-glass px-2 py-1 rounded-lg text-xs font-bold text-yellow-400';
+            muteBtn.style.left = 'calc(50% + 110px)';
+            const label = () => { muteBtn.textContent = muted ? 'SOUND: OFF (M)' : 'SOUND: ON (M)'; };
+            label();
+            document.body.appendChild(muteBtn);
+
+            function init() {
+                if (ac) return ac;
+                try {
+                    ac = new (window.AudioContext || window.webkitAudioContext)();
+                    master = ac.createGain(); master.gain.value = muted ? 0 : 0.8;
+                    const comp = ac.createDynamicsCompressor();
+                    master.connect(comp); comp.connect(ac.destination);
+                    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+                    const d = noiseBuf.getChannelData(0);
+                    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+                } catch (e) { ac = null; }
+                return ac;
+            }
+            function resume() { const c = init(); if (c && c.state === 'suspended') c.resume(); }
+            function bus(sp) {
+                sp = sp || { vol: 1, pan: 0 };
+                const g = ac.createGain(); g.gain.value = sp.vol;
+                if (sp.pan && ac.createStereoPanner) {
+                    const p = ac.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, sp.pan));
+                    g.connect(p); p.connect(master);
+                } else g.connect(master);
+                return g;
+            }
+            function tone(f, d, type = 'square', v = 0.1, o = {}) {
+                if (muted || !init()) return;
+                const t0 = ac.currentTime + (o.delay || 0);
+                const osc = ac.createOscillator(), g = ac.createGain();
+                osc.type = type; osc.frequency.setValueAtTime(f, t0);
+                if (o.to) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.to), t0 + d);
+                g.gain.setValueAtTime(v, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+                osc.connect(g); g.connect(bus(o.sp)); osc.start(t0); osc.stop(t0 + d + 0.02);
+            }
+            function noise(d, v, o = {}) {
+                if (muted || !init()) return;
+                const t0 = ac.currentTime + (o.delay || 0);
+                const src = ac.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+                const f = ac.createBiquadFilter(); f.type = o.type || 'lowpass';
+                f.frequency.setValueAtTime(o.f || 4000, t0);
+                if (o.to) f.frequency.exponentialRampToValueAtTime(Math.max(20, o.to), t0 + d);
+                f.Q.value = o.q || 0.7;
+                const g = ac.createGain(); g.gain.setValueAtTime(v, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+                src.connect(f); f.connect(g); g.connect(bus(o.sp));
+                src.start(t0, Math.random()); src.stop(t0 + d + 0.02);
+            }
+            function spatial(x, y) {
+                const dx = x - myPlayer.x, dy = y - myPlayer.y, dist = Math.hypot(dx, dy);
+                const vol = Math.pow(Math.max(0, 1 - dist / 1500), 1.6);
+                let pan;
+                if (view === 'top') pan = dx / 700;
+                else { const a = myPlayer.angle; pan = (-dx * Math.sin(a) + dy * Math.cos(a)) / 600; }
+                return { vol, pan: Math.max(-1, Math.min(1, pan)) };
+            }
+            const GUN = {
+                pistol: { n: 0.12, f: 5000, v: 0.35, th: 180, tv: 0.25 },
+                ak47: { n: 0.14, f: 3500, v: 0.4, th: 120, tv: 0.3 },
+                shotgun: { n: 0.28, f: 2200, v: 0.6, th: 70, tv: 0.45 },
+                sniper: { n: 0.45, f: 1500, v: 0.7, th: 55, tv: 0.55 }
+            };
+            function shot(w, sp) {
+                if (sp && sp.vol < 0.03) return;
+                const g = GUN[w] || GUN.pistol;
+                noise(g.n, g.v, { f: g.f, to: 400, sp });
+                tone(g.th, 0.16, 'sine', g.tv, { to: 30, sp });
+                if (w === 'sniper') noise(0.9, 0.12, { f: 900, to: 150, sp, delay: 0.05 });
+            }
+            function remoteShot(b) {
+                if (lastT[b.ownerId] === b.t) return;
+                lastT[b.ownerId] = b.t;
+                const key = Object.keys(WEAPONS).find(k => WEAPONS[k].name === b.wn) || 'pistol';
+                shot(key, spatial(b.x, b.y));
+            }
+            function boom(sp, s = 1) {
+                if (sp && sp.vol < 0.03) return;
+                noise(0.7 * s, 0.7, { f: 1200, to: 80, sp });
+                tone(60, 0.6 * s, 'sine', 0.6, { to: 25, sp });
+            }
+            function ambience(on) {
+                if (!init()) return;
+                if (!on) {
+                    if (amb) {
+                        const a = amb; amb = null;
+                        try { a.gs.forEach(g => g.gain.setTargetAtTime(0, ac.currentTime, 0.4)); } catch (e) {}
+                        setTimeout(() => { try { a.s1.stop(); a.s2.stop(); a.lfo.stop(); } catch (e) {} }, 1800);
+                    }
+                    return;
+                }
+                if (amb) return;
+                const mk = (type, f, v) => {
+                    const s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+                    const fl = ac.createBiquadFilter(); fl.type = type; fl.frequency.value = f;
+                    const g = ac.createGain(); g.gain.value = v;
+                    s.connect(fl); fl.connect(g); g.connect(master); s.start(0, Math.random());
+                    return { s, g };
+                };
+                const sea = mk('lowpass', 420, 0.05), wind = mk('bandpass', 900, 0.018);
+                const lfo = ac.createOscillator(), lg = ac.createGain();
+                lfo.frequency.value = 0.11; lg.gain.value = 0.04;
+                lfo.connect(lg); lg.connect(sea.g.gain); lfo.start();
+                amb = { s1: sea.s, s2: wind.s, lfo, gs: [sea.g, wind.g] };
+            }
+            function toggle() {
+                muted = !muted;
+                try { localStorage.setItem('sfxMuted', muted ? '1' : '0'); } catch (e) {}
+                if (init()) master.gain.setTargetAtTime(muted ? 0 : 0.8, ac.currentTime, 0.05);
+                label();
+                if (!muted) tone(900, 0.05, 'square', 0.06);
+            }
+            muteBtn.addEventListener('click', toggle);
+            return {
+                resume, tone, noise, shot, remoteShot, boom, spatial, ambience, toggle,
+                hit() { tone(1400, 0.05, 'square', 0.12, { to: 900 }); tone(900, 0.06, 'triangle', 0.1, { delay: 0.03 }); },
+                kill() { tone(520, 0.1, 'square', 0.1); tone(780, 0.12, 'square', 0.1, { delay: 0.09 }); tone(1040, 0.22, 'triangle', 0.12, { delay: 0.18 }); },
+                hurt() { const n = Date.now(); if (n - lastHurt < 90) return; lastHurt = n; noise(0.12, 0.35, { f: 700, to: 200 }); tone(110, 0.12, 'sine', 0.3, { to: 60 }); },
+                reloadStart() { noise(0.04, 0.3, { type: 'highpass', f: 2500 }); tone(300, 0.05, 'square', 0.06, { delay: 0.06 }); },
+                reloadDone() { noise(0.05, 0.35, { type: 'highpass', f: 3000 }); tone(520, 0.06, 'square', 0.08, { delay: 0.07 }); },
+                pickup(r) { const f = 600 * (1 + r * 0.15); for (let i = 0; i <= r + 1; i++) tone(f * (1 + i * 0.25), 0.1, 'triangle', 0.1, { delay: i * 0.06 }); },
+                heal() { tone(500, 0.18, 'sine', 0.15); tone(750, 0.3, 'sine', 0.15, { delay: 0.12 }); },
+                shield() { tone(300, 0.35, 'sawtooth', 0.08, { to: 700 }); noise(0.25, 0.1, { type: 'bandpass', f: 1500 }); },
+                dash() { noise(0.3, 0.3, { type: 'bandpass', f: 400, to: 3000, q: 1.2 }); },
+                fire() { noise(0.5, 0.4, { f: 2500, to: 200 }); tone(90, 0.4, 'sawtooth', 0.25, { to: 40 }); },
+                warn(sp) { [0, 0.2, 0.4, 0.6].forEach((d, i) => tone(i % 2 ? 520 : 700, 0.18, 'square', 0.08, { delay: d, sp })); },
+                wanted() { tone(392, 0.15, 'triangle', 0.12); tone(523, 0.15, 'triangle', 0.12, { delay: 0.12 }); tone(659, 0.3, 'triangle', 0.12, { delay: 0.24 }); },
+                revive() { [262, 330, 392, 523, 659].forEach((f, i) => tone(f, 0.25, 'sine', 0.14, { delay: i * 0.09 })); },
+                tick() { tone(800, 0.08, 'square', 0.1); },
+                go() { tone(1200, 0.35, 'square', 0.12); noise(0.4, 0.2, { type: 'bandpass', f: 500, to: 3000 }); },
+                win() { [523, 659, 784, 1047].forEach((f, i) => tone(f, i === 3 ? 0.6 : 0.18, 'triangle', 0.14, { delay: i * 0.15 })); },
+                lose() { tone(392, 0.25, 'sawtooth', 0.12, { to: 330 }); tone(294, 0.4, 'sawtooth', 0.12, { delay: 0.25, to: 200 }); },
+                click() { tone(900, 0.03, 'square', 0.04); },
+                step(sp, v = 1) { noise(0.07, 0.12 * v, { f: 500 + Math.random() * 250, to: 200, sp }); },
+                stormTick() { tone(70, 0.35, 'sawtooth', 0.12, { to: 55 }); noise(0.3, 0.08, { f: 300 }); }
+            };
+        })();
+        ['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, () => SFX.resume(), { passive: true }));
+        if (document.addEventListener) document.addEventListener('click', e => { const b = e.target && e.target.closest && e.target.closest('button'); if (b && b.id !== 'btnMobileShoot') SFX.click(); });
+
+
         // --- GAME STATE ---
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
@@ -430,7 +585,11 @@
         const disp = {};
         let spectating = false, specId = null;
         const cam = { x: MAP_SIZE / 2, y: MAP_SIZE / 2 };
-        let floatTexts = [], hitMarker = 0;
+        let floatTexts = [], hitMarker = 0, killFlash = 0, killName = '', aimOnEnemy = false, lockedId = null;
+        let lastStep = 0, lastStormTick = 0;
+        let ghostCd = 0, soul = 0, meteors = [], mouseSeen = false, actx = null;
+        const reveals = {}, bulletRefs = new Map();
+        let view = 'top';
         let storm = { x: MAP_SIZE / 2, y: MAP_SIZE / 2, radius: STORM_START };
         const online = () => !!(db && roomCode && roomCode !== 'OFFLINE');
 
@@ -492,8 +651,8 @@
         function addFeed(e) {
             const d = document.createElement('div');
             d.className = 'hud-glass px-2 py-1 rounded text-xs font-bold';
-            d.style.borderLeft = `3px solid ${(e.k === localPlayerId || e.v === localPlayerId) ? '#facc15' : '#ef4444'}`;
-            d.textContent = e.k ? `${e.kn} > ${e.vn} [${e.w}]` : `${e.vn} died in the storm`;
+            d.style.borderLeft = `3px solid ${e.c || ((e.k === localPlayerId || e.v === localPlayerId) ? '#facc15' : '#ef4444')}`;
+            d.textContent = e.txt ? e.txt : e.k ? `${e.kn} > ${e.vn} [${e.w}]` : `${e.vn} died in the storm`;
             feedEl.appendChild(d);
             while (feedEl.children.length > 5) feedEl.firstChild.remove();
             setTimeout(() => d.remove(), 6000);
@@ -510,12 +669,17 @@
 
         // --- SPECTATE MODE ---
         const specBar = document.createElement('div');
-        specBar.className = 'fixed top-16 left-1/2 -translate-x-1/2 z-40 hidden hud-glass px-3 py-2 rounded-xl flex items-center gap-2 text-white font-bold';
+        specBar.className = 'fixed top-16 left-1/2 -translate-x-1/2 z-40 hidden hud-glass px-3 py-2 rounded-xl flex flex-wrap justify-center max-w-[96vw] items-center gap-2 text-white font-bold';
         specBar.innerHTML = '<button id="specPrev" class="px-3 py-1 bg-slate-700 rounded">&#9664;</button>' +
-            '<span class="text-[10px] text-gray-400 uppercase">Spectating</span>' +
+            '<span class="text-[10px] text-gray-400 uppercase">Ghost view</span>' +
             '<span id="specName" class="text-sm uppercase min-w-[100px] text-center"></span>' +
             '<button id="specNext" class="px-3 py-1 bg-slate-700 rounded">&#9654;</button>' +
-            '<button id="specLeave" class="px-3 py-1 bg-red-600 rounded text-sm">Leave</button>';
+            '<button id="specLeave" class="px-3 py-1 bg-red-600 rounded text-sm">Leave</button>' +
+            '<div class="w-full flex flex-wrap justify-center items-center gap-2 pt-1 border-t border-slate-700">' +
+            '<button id="ghMeteor" class="px-2 py-1 bg-orange-600 rounded text-xs">Meteor [1]</button>' +
+            '<button id="ghGift" class="px-2 py-1 bg-emerald-600 rounded text-xs">Gift [2]</button>' +
+            '<button id="ghReveal" class="px-2 py-1 bg-sky-600 rounded text-xs">Reveal [3]</button>' +
+            '<span id="ghSoul" class="text-[10px] text-purple-300 font-bold"></span></div>';
         document.body.appendChild(specBar);
         const specList = () => Object.values(players).filter(p => p.id !== localPlayerId && p.alive && p.x != null);
         function cycleSpec(dir) {
@@ -528,6 +692,9 @@
         $('specPrev').addEventListener('click', () => cycleSpec(-1));
         $('specNext').addEventListener('click', () => cycleSpec(1));
         $('specLeave').addEventListener('click', () => $('btnReturnLobby').click());
+        $('ghMeteor').addEventListener('click', () => ghostCast('meteor'));
+        $('ghGift').addEventListener('click', () => ghostCast('gift'));
+        $('ghReveal').addEventListener('click', () => ghostCast('reveal'));
         $('btnKeepWatching').addEventListener('click', () => {
             modalGameEnd.classList.add('hidden');
             spectating = true;
@@ -542,7 +709,7 @@
         // --- FIREBASE SYNC ---
         const profile = () => ({
             id: localPlayerId, name: myName, color: myColor, skin: mySkin, helmet: myHelmet, hat: myHat, power: myPower,
-            ready: myPlayer.ready, alive: myPlayer.alive, x: Math.round(myPlayer.x), y: Math.round(myPlayer.y),
+            ready: myPlayer.ready, alive: myPlayer.alive, kills: myPlayer.kills, x: Math.round(myPlayer.x), y: Math.round(myPlayer.y),
             angle: +myPlayer.angle.toFixed(2), hp: Math.ceil(myPlayer.hp)
         });
         function syncPlayerToFirebase() { if (online()) db.ref(`rooms/${roomCode}/players/${localPlayerId}`).update(profile()); }
@@ -550,7 +717,7 @@
             if (!online()) return;
             db.ref(`rooms/${roomCode}/players/${localPlayerId}`).update({
                 x: Math.round(myPlayer.x), y: Math.round(myPlayer.y), angle: +myPlayer.angle.toFixed(2),
-                hp: Math.ceil(myPlayer.hp), alive: myPlayer.alive
+                hp: Math.ceil(myPlayer.hp), alive: myPlayer.alive, kills: myPlayer.kills
             });
         }
 
@@ -631,6 +798,7 @@
         $('btnLobbyHelp').addEventListener('click', () => modalControls.classList.remove('hidden'));
         $('btnCloseControls').addEventListener('click', () => modalControls.classList.add('hidden'));
         $('btnReturnLobby').addEventListener('click', () => {
+            SFX.ambience(false);
             stopSpectating();
             modalGameEnd.classList.add('hidden');
             screenHUD.classList.add('hidden');
@@ -704,24 +872,49 @@
             });
             ref.child('bullets').on('child_added', s => {
                 const b = s.val();
-                if (b && b.ownerId !== localPlayerId && gameState === 'PLAYING' && Date.now() - b.t < 2500) bullets.push(b);
+                if (b && b.ownerId !== localPlayerId && gameState === 'PLAYING' && Date.now() - b.t < 2500) { bullets.push(b); SFX.remoteShot(b); }
             });
             ref.child('taken').on('child_added', s => { lootCrates = lootCrates.filter(c => c.id !== s.key); });
             ref.child('kills').on('child_added', s => {
                 const e = s.val();
                 if (!e || Date.now() - e.t > 8000) return;
                 addFeed(e);
-                if (e.k === localPlayerId) myPlayer.kills++;
+                if (e.k === localPlayerId) {
+                    myPlayer.kills++; killFlash = Date.now(); killName = e.vn;
+                    SFX.kill();
+                    if (e.bounty && !myPlayer.isDead) {
+                        myPlayer.hp = Math.min(100, myPlayer.hp + 50);
+                        floatTexts.push({ x: myPlayer.x, y: myPlayer.y, txt: 'BOUNTY +50 HP', c: '#facc15', life: 1400 });
+                        pushGhostEvent({ type: 'gift', x: e.x, y: e.y, rar: 3, kind: 'weapon', label: 'BOUNTY DROP' });
+                    }
+                    if (myPlayer.kills === 2 && !myPlayer.isDead) pushGhostEvent({ type: 'wanted' });
+                }
+            });
+            ref.child('dmg').on('child_added', s => {
+                const d = s.val();
+                if (!d || d.v !== localPlayerId || gameState !== 'PLAYING' || Date.now() - d.t > 5000) return;
+                hurt(d.d, true, { by: d.s, wn: d.w }, true);
+            });
+            ref.child('ghost').on('child_added', s => {
+                const e = s.val();
+                if (!e || gameState !== 'PLAYING' || Date.now() - e.t > 5000) return;
+                handleGhost(e);
+            });
+            ref.child('bullets').on('child_removed', s => {
+                const b = s.val();
+                if (b) bullets = bullets.filter(x => x.id !== b.id);
             });
             ref.child('hits').on('child_added', s => {
                 const h = s.val();
                 if (!h || gameState !== 'PLAYING' || Date.now() - h.t > 5000 || h.s !== localPlayerId || h.v === localPlayerId) return;
-                myPlayer.dmgDealt += h.d; hitMarker = Date.now();
+                myPlayer.dmgDealt += h.d; hitMarker = Date.now(); SFX.hit();
+                if (h.w === 'Meteor') addSoul();
                 floatTexts.push({ x: h.x, y: h.y - 20, txt: '-' + h.d, c: '#facc15', life: 800 });
             });
             ref.child('fx').on('child_added', s => {
                 const f = s.val();
                 if (!f || f.owner === localPlayerId || gameState !== 'PLAYING' || Date.now() - f.t > 2500) return;
+                SFX.boom(SFX.spatial(f.x, f.y), 1);
                 particles.push({ x: f.x, y: f.y, life: 450 });
                 if (!myPlayer.isDead && Math.hypot(myPlayer.x - f.x, myPlayer.y - f.y) < 120) hurt(50, false, { by: f.owner, wn: 'Fire Blast' });
             });
@@ -761,6 +954,7 @@
             countdownOverlay.classList.remove('hidden');
             spawnLootCrates();
             bullets = []; particles = []; floatTexts = []; feedEl.innerHTML = '';
+            soul = 0; ghostCd = 0; meteors = []; killFlash = 0;
             const ids = Object.keys(players).sort();
             const idx = Math.max(0, ids.indexOf(localPlayerId));
             const a = idx / Math.max(1, ids.length) * Math.PI * 2;
@@ -778,15 +972,15 @@
             countdownNumber.textContent = count;
             const timer = setInterval(() => {
                 count--;
-                if (count > 0) countdownNumber.textContent = count;
-                else { clearInterval(timer); countdownOverlay.classList.add('hidden'); startGameMatch(); }
+                if (count > 0) { countdownNumber.textContent = count; SFX.tick(); }
+                else { SFX.go(); clearInterval(timer); countdownOverlay.classList.add('hidden'); startGameMatch(); }
             }, 1000);
         }
 
         function startGameMatch() {
             gameState = "PLAYING";
             screenHUD.classList.remove('hidden');
-            matchStartT = Date.now();
+            matchStartT = Date.now(); SFX.ambience(true);
             storm.radius = STORM_START;
             matchPlayers = Math.max(1, Object.values(players).filter(p => p.alive).length);
             if (isHost && online()) db.ref(`rooms/${roomCode}/state`).set('PLAYING');
@@ -807,7 +1001,116 @@
             }
         }
 
+        // --- SOUND (legacy helper) ---
+        function beep(f = 600, d = 0.06, type = 'square', v = 0.05) { SFX.tone(f, d, type, v); }
+
+        // --- SHOOTER-SIDE HIT DETECTION (what you see is what you hit) ---
+        function bulletTarget(b) {
+            if (myPlayer.isDead || gameState !== 'PLAYING') return null;
+            for (const p of Object.values(players)) {
+                if (p.id === localPlayerId || !p.alive) continue;
+                const d = disp[p.id];
+                if (d && Math.hypot(d.x - b.x, d.y - b.y) < 28) return p;
+            }
+            return null;
+        }
+        function registerHit(b, p) {
+            myPlayer.dmgDealt += b.damage; hitMarker = Date.now(); SFX.hit();
+            const d = disp[p.id] || p;
+            floatTexts.push({ x: d.x, y: d.y, txt: '-' + b.damage, c: '#facc15', life: 800 });
+            if (!online()) return;
+            const r = db.ref(`rooms/${roomCode}/dmg`).push({ v: p.id, s: localPlayerId, d: b.damage, w: b.wn, t: Date.now() });
+            setTimeout(() => r.remove(), 3000);
+            const br = bulletRefs.get(b.id);
+            if (br) { br.remove(); bulletRefs.delete(b.id); }
+        }
+        function updateAimLock() {
+            aimOnEnemy = false; lockedId = null;
+            if (myPlayer.isDead || spectating || gameState !== 'PLAYING') return;
+            const ca = Math.cos(myPlayer.angle), sa = Math.sin(myPlayer.angle);
+            for (const p of Object.values(players)) {
+                if (p.id === localPlayerId || !p.alive) continue;
+                const d = disp[p.id]; if (!d) continue;
+                const rx = d.x - myPlayer.x, ry = d.y - myPlayer.y;
+                const fwd = rx * ca + ry * sa, lat = Math.abs(-rx * sa + ry * ca);
+                if (fwd > 0 && fwd < 1000 && lat < 30) { aimOnEnemy = true; lockedId = p.id; return; }
+            }
+        }
+
+        // --- GHOST HAUNTING, REDEMPTION AND BOUNTY ---
+        function pushGhostEvent(ev) {
+            if (!online()) return;
+            Object.assign(ev, { by: localPlayerId, bn: myName, t: Date.now() });
+            const r = db.ref(`rooms/${roomCode}/ghost`).push(ev);
+            setTimeout(() => r.remove(), 6000);
+        }
+        function ghostCast(type) {
+            if (!spectating || !online()) return;
+            const t = players[specId];
+            if (!t || !t.alive) { toast('No living target to haunt'); return; }
+            const now = Date.now();
+            if (now < ghostCd) { toast(`Ghost power recharging: ${Math.ceil((ghostCd - now) / 1000)}s`); return; }
+            ghostCd = now + 12000;
+            const d = disp[specId] || t;
+            pushGhostEvent({ type, tid: specId, x: Math.round(d.x), y: Math.round(d.y) });
+        }
+        function spawnGiftCrate(e) {
+            const r = rng(e.t);
+            const k = r(), kind = e.kind || (k < 0.4 ? 'weapon' : k < 0.7 ? 'armor' : 'medkit');
+            const type = ['ak47', 'shotgun', 'sniper'][Math.floor(r() * 3)];
+            const rar = e.rar != null ? e.rar : 1 + Math.floor(r() * 3);
+            let x = e.x, y = e.y, a = r() * 6.28;
+            for (let i = 0; i < 8; i++) { x = e.x + Math.cos(a) * 60; y = e.y + Math.sin(a) * 60; if (!checkObstacleCollision(x, y, 20)) break; a += 0.8; }
+            lootCrates.push({ id: 'g' + e.t + e.by.slice(-4), x, y, kind, type, rar });
+        }
+        function handleGhost(e) {
+            const msg = {
+                meteor: `${e.bn} (ghost) called a METEOR`,
+                gift: e.label ? `${e.label}!` : `${e.bn} (ghost) sent a GIFT`,
+                reveal: `${e.bn} (ghost) REVEALED a survivor`,
+                wanted: `${e.bn} is WANTED! Bounty on their head`,
+                revive: `${e.bn} RETURNED FROM THE DEAD`
+            };
+            addFeed({ txt: msg[e.type] || '', c: { gift: '#34d399', wanted: '#facc15', revive: '#a855f7' }[e.type] || '#fb923c' });
+            if (e.type === 'meteor') { meteors.push({ x: e.x, y: e.y, t0: Date.now(), by: e.by, done: false }); SFX.warn(SFX.spatial(e.x, e.y)); }
+            else if (e.type === 'gift') spawnGiftCrate(e);
+            else if (e.type === 'reveal') { reveals[e.tid] = Date.now() + 6000; if (e.tid === localPlayerId) toast('A ghost revealed your position!'); }
+            else if (e.type === 'revive') particles.push({ x: e.x, y: e.y, life: 450 });
+            if (e.type === 'wanted') SFX.wanted();
+            if (e.type === 'revive') SFX.revive();
+            if (e.type === 'gift') SFX.pickup(3);
+        }
+        function addSoul() {
+            if (!myPlayer.isDead) return;
+            soul++;
+            addFeed({ txt: `Soul ${Math.min(soul, 2)}/2`, c: '#a855f7' });
+            if (soul >= 2) revive();
+        }
+        function revive() {
+            if (gameState !== 'PLAYING' || roomState !== 'PLAYING' || !myPlayer.isDead) return;
+            soul = 0;
+            let x, y, tries = 0;
+            do {
+                const a = Math.random() * 6.283, d = Math.random() * storm.radius * 0.6;
+                x = storm.x + Math.cos(a) * d; y = storm.y + Math.sin(a) * d;
+            } while (checkObstacleCollision(x, y, 26) && tries++ < 30);
+            Object.assign(myPlayer, { x, y, hp: 60, armor: 0, weapon: 'pistol', ammo: 12, dmgMult: 1, rarity: 0, reloading: 0, isDead: false, alive: true, diedAt: 0, skillCooldown: 0 });
+            stopSpectating();
+            modalGameEnd.classList.add('hidden');
+            syncPlayerToFirebase();
+            pushGhostEvent({ type: 'revive', x: Math.round(x), y: Math.round(y) });
+            floatTexts.push({ x, y, txt: 'REVIVED!', c: '#a855f7', life: 1500 });
+        }
+        function updateGhostUI() {
+            const cd = Math.max(0, Math.ceil((ghostCd - Date.now()) / 1000));
+            $('ghSoul').textContent = `SOUL ${soul}/2 - land meteor hits to return to life | ${cd ? 'power in ' + cd + 's' : 'POWER READY'}`;
+        }
+
         function showEnd(title, sub, canWatch = false) {
+            if (document.exitPointerLock) document.exitPointerLock();
+            if (title === 'BOOYAH!') { SFX.win(); SFX.ambience(false); }
+            else if (title === 'MATCH OVER') SFX.ambience(false);
+            else if (title === 'ELIMINATED') SFX.lose();
             $('endResultTitle').textContent = title;
             $('endResultSub').textContent = sub;
             $('btnKeepWatching').classList.toggle('hidden', !canWatch);
@@ -817,7 +1120,7 @@
         }
         const aliveCount = () => online() ? Object.values(players).filter(p => p.alive).length : (myPlayer.alive ? 1 : 0);
 
-        function hurt(dmg, useArmor = true, src = null) {
+        function hurt(dmg, useArmor = true, src = null, silent = false) {
             if (myPlayer.isDead || gameState !== 'PLAYING') return;
             if (useArmor && myPlayer.armor > 0) {
                 const absorbed = Math.min(myPlayer.armor, dmg * 0.6);
@@ -826,8 +1129,9 @@
             myPlayer.hp -= dmg;
             if (src) {
                 floatTexts.push({ x: myPlayer.x, y: myPlayer.y - 24, txt: '-' + Math.round(dmg), c: '#f87171', life: 700 });
-                if (online() && src.by !== localPlayerId) {
-                    const r = db.ref(`rooms/${roomCode}/hits`).push({ s: src.by, v: localPlayerId, d: Math.round(dmg), x: Math.round(myPlayer.x), y: Math.round(myPlayer.y), t: Date.now() });
+                SFX.hurt();
+                if (online() && src.by !== localPlayerId && !silent) {
+                    const r = db.ref(`rooms/${roomCode}/hits`).push({ s: src.by, w: src.wn, v: localPlayerId, d: Math.round(dmg), x: Math.round(myPlayer.x), y: Math.round(myPlayer.y), t: Date.now() });
                     setTimeout(() => r.remove(), 2500);
                 }
             }
@@ -835,10 +1139,10 @@
         }
         function die(src) {
             const rank = Math.max(1, aliveCount());
-            myPlayer.hp = 0; myPlayer.isDead = true; myPlayer.alive = false; myPlayer.diedAt = Date.now(); myPlayer.reloading = 0;
+            myPlayer.hp = 0; myPlayer.isDead = true; myPlayer.alive = false; myPlayer.diedAt = Date.now(); myPlayer.reloading = 0; soul = 0;
             syncPos();
             const kp = src && players[src.by];
-            const ev = { k: src ? src.by : null, kn: kp ? kp.name : 'Unknown', v: localPlayerId, vn: myName, w: src ? src.wn : 'Storm', t: Date.now() };
+            const ev = { k: src ? src.by : null, kn: kp ? kp.name : 'Unknown', v: localPlayerId, vn: myName, w: src ? src.wn : 'Storm', x: Math.round(myPlayer.x), y: Math.round(myPlayer.y), bounty: myPlayer.kills >= 2, t: Date.now() };
             if (online()) { const r = db.ref(`rooms/${roomCode}/kills`).push(ev); setTimeout(() => r.remove(), 4000); }
             else addFeed(ev);
             const othersAlive = online() && Object.values(players).some(p => p.id !== localPlayerId && p.alive);
@@ -857,17 +1161,30 @@
             if (spectating) {
                 if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'q') cycleSpec(-1);
                 if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'e') cycleSpec(1);
+                if (e.key === '1') ghostCast('meteor');
+                if (e.key === '2') ghostCast('gift');
+                if (e.key === '3') ghostCast('reveal');
             }
             if (e.code === 'Space') { e.preventDefault(); if (document.activeElement) document.activeElement.blur(); useSuperpower(); }
             if (e.key.toLowerCase() === 'r') reloadWeapon();
+            if (e.key.toLowerCase() === 'v') cycleView();
+            if (e.key.toLowerCase() === 'm') SFX.toggle();
             if (e.key.toLowerCase() === 'f') applyMedkit();
         });
         window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
         window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
         let mousePos = { x: 0, y: 0 };
-        window.addEventListener('mousemove', e => { mousePos.x = e.clientX; mousePos.y = e.clientY; });
-        window.addEventListener('mousedown', e => { if (gameState === "PLAYING" && e.button === 0 && e.target === canvas) shootWeapon(); });
+        window.addEventListener('mousemove', e => {
+            mousePos.x = e.clientX; mousePos.y = e.clientY; mouseSeen = true;
+            if (document.pointerLockElement === canvas && gameState === 'PLAYING' && !myPlayer.isDead) myPlayer.angle += e.movementX * 0.0025;
+        });
+        window.addEventListener('mousedown', e => {
+            if (gameState === "PLAYING" && e.button === 0 && e.target === canvas) {
+                if (view !== 'top' && !document.pointerLockElement && !myPlayer.isDead) { try { canvas.requestPointerLock(); } catch (err) {} }
+                shootWeapon();
+            }
+        });
         // Hold-to-fire for desktop
         let mouseHeld = false;
         window.addEventListener('mousedown', e => { if (e.button === 0 && e.target === canvas) mouseHeld = true; });
@@ -908,7 +1225,7 @@
         setupJoystick('leftJoystick', 'leftKnob', (nx, ny) => { touchMove.x = nx; touchMove.y = ny; });
         setupJoystick('rightJoystick', 'rightKnob', (nx, ny, angle, active) => {
             touchAim.x = nx; touchAim.y = ny;
-            if (active) myPlayer.angle = angle;
+            if (active && view === 'top') myPlayer.angle = angle;
         });
 
         $('btnMobileShoot').addEventListener('touchstart', e => { e.preventDefault(); shootWeapon(); });
@@ -923,7 +1240,7 @@
             if (now - myPlayer.lastShotTime < w.fireRate) return;
             if (myPlayer.ammo <= 0) { reloadWeapon(); return; }
             myPlayer.lastShotTime = now;
-            myPlayer.ammo--;
+            myPlayer.ammo--; SFX.shot(myPlayer.weapon);
             for (let i = 0; i < (w.pellets || 1); i++) {
                 const finalAngle = myPlayer.angle + (Math.random() * w.recoil - w.recoil / 2);
                 const bullet = {
@@ -935,7 +1252,8 @@
                 bullets.push({ ...bullet });
                 if (online()) {
                     const r = db.ref(`rooms/${roomCode}/bullets`).push(bullet);
-                    setTimeout(() => r.remove(), 2000);
+                    bulletRefs.set(bullet.id, r);
+                    setTimeout(() => { r.remove(); bulletRefs.delete(bullet.id); }, 2000);
                 }
             }
             if (myPlayer.ammo <= 0) reloadWeapon();
@@ -945,15 +1263,16 @@
             const w = WEAPONS[myPlayer.weapon];
             if (myPlayer.ammo >= w.ammoMax) return;
             myPlayer.reloadTotal = w.reloadTime;
-            myPlayer.reloading = Date.now() + w.reloadTime;
+            myPlayer.reloading = Date.now() + w.reloadTime; SFX.reloadStart();
         }
         function applyMedkit() {
             if (gameState !== 'PLAYING' || myPlayer.isDead || myPlayer.hp >= 100 || myPlayer.medkits <= 0) return;
-            myPlayer.medkits--;
+            myPlayer.medkits--; SFX.heal();
             myPlayer.hp = Math.min(100, myPlayer.hp + 40);
             floatTexts.push({ x: myPlayer.x, y: myPlayer.y - 24, txt: '+40', c: '#34d399', life: 800 });
         }
         function applyCrate(c) {
+            SFX.pickup(c.rar);
             const R = RARITY[c.rar];
             const say = t => floatTexts.push({ x: myPlayer.x, y: myPlayer.y - 32, txt: t, c: R.c, life: 1100 });
             if (c.kind === 'weapon') {
@@ -972,9 +1291,10 @@
             if (gameState !== 'PLAYING' || myPlayer.isDead) return;
             if (myPlayer.skillCooldown > 0) { toast(`Skill recharging: ${Math.ceil(myPlayer.skillCooldown / 1000)}s`); return; }
             myPlayer.skillCooldown = 10000;
-            if (myPower === 'healer') myPlayer.hp = Math.min(100, myPlayer.hp + 50);
-            else if (myPower === 'shield') myPlayer.armor = Math.min(100, myPlayer.armor + 50);
+            if (myPower === 'healer') { myPlayer.hp = Math.min(100, myPlayer.hp + 50); SFX.heal(); }
+            else if (myPower === 'shield') { myPlayer.armor = Math.min(100, myPlayer.armor + 50); SFX.shield(); }
             else if (myPower === 'dash') {
+                SFX.dash();
                 for (let i = 0; i < 8; i++) {
                     const nx = myPlayer.x + Math.cos(myPlayer.angle) * 20, ny = myPlayer.y + Math.sin(myPlayer.angle) * 20;
                     if (checkObstacleCollision(nx, ny, 18)) break;
@@ -982,6 +1302,7 @@
                 }
                 clampToMap();
             } else if (myPower === 'fireball') {
+                SFX.fire();
                 const f = { x: myPlayer.x + Math.cos(myPlayer.angle) * 180, y: myPlayer.y + Math.sin(myPlayer.angle) * 180, owner: localPlayerId, t: Date.now() };
                 particles.push({ x: f.x, y: f.y, life: 450 });
                 if (online()) { const r = db.ref(`rooms/${roomCode}/fx`).push(f); setTimeout(() => r.remove(), 3000); }
@@ -1015,12 +1336,17 @@
             const speed = 4.2 * dt / 16.667;
             if (moveX !== 0 || moveY !== 0) {
                 const len = Math.max(1, Math.hypot(moveX, moveY));
-                const nx = moveX / len * speed, ny = moveY / len * speed;
+                let mx = moveX, my = moveY;
+                if (view !== 'top') { const ca = Math.cos(myPlayer.angle), sa = Math.sin(myPlayer.angle); mx = -sa * moveX - ca * moveY; my = ca * moveX - sa * moveY; }
+                const nowP = Date.now();
+                if (nowP - lastStep > 310) { lastStep = nowP; SFX.step(); }
+                const nx = mx / len * speed, ny = my / len * speed;
                 if (!checkObstacleCollision(myPlayer.x + nx, myPlayer.y, 18)) myPlayer.x += nx;
                 if (!checkObstacleCollision(myPlayer.x, myPlayer.y + ny, 18)) myPlayer.y += ny;
                 clampToMap();
             }
-            if (touchAim.x === 0 && touchAim.y === 0) myPlayer.angle = Math.atan2(mousePos.y - canvas.height / 2, mousePos.x - canvas.width / 2);
+            if (view === 'top') { if (touchAim.x === 0 && touchAim.y === 0 && mouseSeen) { const a = aimFromMouse(); if (a !== null) myPlayer.angle = a; } }
+            else if (touchAim.x !== 0) myPlayer.angle += touchAim.x * 0.05 * dt / 16.667;
             if (mouseHeld) shootWeapon();
 
             for (let i = lootCrates.length - 1; i >= 0; i--) {
@@ -1105,42 +1431,335 @@
             targetCtx.restore();
         }
 
-        // --- MAIN CANVAS RENDER LOOP ---
-        function drawPlayer(p, x, y, angle, hp) {
-            ctx.save();
-            ctx.translate(x, y);
-            ctx.rotate(angle || 0);
-            renderTopDownHumanSoldier(ctx, p);
-            ctx.restore();
-            ctx.fillStyle = "#ffffff";
-            ctx.font = "bold 12px Rajdhani";
-            ctx.textAlign = "center";
-            ctx.fillText(p.name || "Operator", x, y - 28);
-            ctx.fillStyle = "rgba(0,0,0,0.6)";
-            ctx.fillRect(x - 20, y - 24, 40, 5);
-            ctx.fillStyle = "#10b981";
-            ctx.fillRect(x - 20, y - 24, Math.max(0, Math.min(1, (hp ?? 100) / 100)) * 40, 5);
+        // ================= 3D RENDERER (Three.js, low-poly) =================
+        const GY = 4.5;
+        const HELMET_COL = { lvl1: 0x475569, lvl2: 0x1d4ed8, lvl3: 0xca8a04 };
+        const VIEW_LABEL = { top: 'TOP-DOWN', third: 'THIRD PERSON', first: 'FIRST PERSON' };
+        const VIEW_FOV = { top: 50, third: 70, first: 80 };
+        const have3D = typeof THREE !== 'undefined';
+        if (!have3D) toast('3D engine failed to load. Check your internet connection.');
+        let renderer = null, scene, camera, raycaster, groundPlane, stormWall;
+        const crateMeshes = new Map(), playerMeshes = new Map(), meteorMeshes = new Map(), bulletPool = [], fxPool = [], labels = [];
+        const flat = c => new THREE.MeshPhongMaterial({ color: c, flatShading: true, shininess: 0, specular: 0x000000 });
+        const proj = have3D ? new THREE.Vector3() : null;
+
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'fixed top-2 left-1/2 -translate-x-1/2 z-40 hidden hud-glass px-3 py-1 rounded-lg text-xs font-bold text-yellow-400';
+        document.body.appendChild(viewBtn);
+
+        function setView(v) {
+            view = v;
+            viewBtn.textContent = `VIEW: ${VIEW_LABEL[v]} (V)`;
+            if (camera) { camera.fov = VIEW_FOV[v]; camera.updateProjectionMatrix(); }
+            if (v === 'top' && document.exitPointerLock) document.exitPointerLock();
+            try { localStorage.setItem('viewMode', v); } catch (e) {}
+        }
+        function cycleView() { setView(view === 'top' ? 'third' : view === 'third' ? 'first' : 'top'); }
+        viewBtn.addEventListener('click', cycleView);
+
+        function makeSoldier(p) {
+            const g = new THREE.Group();
+            const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
+            add(new THREE.CylinderGeometry(10, 12, 28, 8), flat(p.color || '#ef4444'), 0, 18, 0);
+            add(new THREE.SphereGeometry(8, 8, 6), flat(0xfcd5b0), 0, 40, 0);
+            add(new THREE.SphereGeometry(9.5, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), flat(HELMET_COL[p.helmet] || 0x475569), 0, 41, 0);
+            add(new THREE.BoxGeometry(24, 5, 5), flat(0x111827), 16, 24, 8);
+            const crown = add(new THREE.ConeGeometry(7, 9, 5), new THREE.MeshBasicMaterial({ color: 0xfacc15 }), 0, 56, 0);
+            crown.visible = false; g.userData.crown = crown;
+            const sh = add(new THREE.CircleGeometry(15, 12), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 }), 0, 0.6, 0);
+            sh.rotation.x = -Math.PI / 2;
+            g.userData.sig = `${p.color}|${p.helmet}`;
+            return g;
+        }
+        function makeCrate(c) {
+            const R = RARITY[c.rar], g = new THREE.Group();
+            const box = new THREE.Mesh(new THREE.BoxGeometry(26, 26, 26), flat(c.kind === 'weapon' ? 0x854d0e : c.kind === 'armor' ? 0x1d4ed8 : 0x047857));
+            box.position.y = 15; g.add(box);
+            const ring = new THREE.Mesh(new THREE.TorusGeometry(22, 2.5, 6, 18), new THREE.MeshBasicMaterial({ color: R.c }));
+            ring.rotation.x = Math.PI / 2; ring.position.y = 3; g.add(ring);
+            if (c.rar >= 1) {
+                const beam = new THREE.Mesh(new THREE.CylinderGeometry(7, 7, 220, 8, 1, true),
+                    new THREE.MeshBasicMaterial({ color: R.c, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+                beam.position.y = 110; g.add(beam);
+            }
+            g.userData.box = box;
+            return g;
+        }
+        function disposeObj(o) { o.traverse(m => { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); }); }
+
+        function init3D() {
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            const el = renderer.domElement;
+            el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;';
+            canvas.parentNode.insertBefore(el, canvas);
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x7dd3fc);
+            scene.fog = new THREE.Fog(0x7dd3fc, 1800, 4200);
+            camera = new THREE.PerspectiveCamera(VIEW_FOV[view], window.innerWidth / window.innerHeight, 2, 6000);
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x4b5563, 0.85));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(600, 1000, 400); scene.add(sun);
+            raycaster = new THREE.Raycaster();
+            groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GY);
+            window.addEventListener('resize', () => {
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            });
+
+            const C = MAP_SIZE / 2;
+            const sea = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000), flat(0x0284c7));
+            sea.rotation.x = -Math.PI / 2; sea.position.set(C, -3, C); scene.add(sea);
+            const sand = new THREE.Mesh(new THREE.CylinderGeometry(ISLAND_RADIUS + 25, ISLAND_RADIUS + 45, 8, 48), flat(0xfde047));
+            sand.position.set(C, 0, C); scene.add(sand);
+            const grass = new THREE.Mesh(new THREE.CylinderGeometry(ISLAND_RADIUS, ISLAND_RADIUS + 5, 9, 48), flat(0x15803d));
+            grass.position.set(C, 0.5, C); scene.add(grass);
+
+            OBSTACLES.forEach(o => {
+                if (o.type === 'warehouse') {
+                    const b = new THREE.Mesh(new THREE.BoxGeometry(o.w, 90, o.h), flat(0x475569));
+                    b.position.set(o.x + o.w / 2, GY + 45, o.y + o.h / 2); scene.add(b);
+                    const r = new THREE.Mesh(new THREE.BoxGeometry(o.w + 10, 8, o.h + 10), flat(0x1e293b));
+                    r.position.set(o.x + o.w / 2, GY + 94, o.y + o.h / 2); scene.add(r);
+                } else if (o.type === 'lake') {
+                    const l = new THREE.Mesh(new THREE.CylinderGeometry(o.r, o.r, 1, 28), flat(0x0ea5e9));
+                    l.position.set(o.x, GY + 0.3, o.y); scene.add(l);
+                } else if (o.type === 'boulder') {
+                    const b = new THREE.Mesh(new THREE.DodecahedronGeometry(o.r, 0), flat(0x64748b));
+                    b.position.set(o.x, GY + o.r * 0.5, o.y); b.scale.y = 0.8; scene.add(b);
+                }
+            });
+            const trees = OBSTACLES.filter(o => o.type === 'tree'), dummy = new THREE.Object3D();
+            const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(5, 6, 30, 6), flat(0x78350f), trees.length);
+            const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(28, 75, 6), flat(0x166534), trees.length);
+            trees.forEach((t, i) => {
+                dummy.scale.set(1, 1, 1); dummy.position.set(t.x, GY + 15, t.y); dummy.updateMatrix(); trunks.setMatrixAt(i, dummy.matrix);
+                const sc = 0.85 + ((i * 37) % 30) / 100;
+                dummy.scale.set(sc, sc, sc); dummy.position.set(t.x, GY + 67, t.y); dummy.updateMatrix(); cones.setMatrixAt(i, dummy.matrix);
+            });
+            scene.add(trunks, cones);
+
+            stormWall = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 500, 64, 1, true),
+                new THREE.MeshBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+            stormWall.position.y = 250; scene.add(stormWall);
+        }
+        if (have3D) { init3D(); setView(view); }
+
+        function aimFromMouse() {
+            if (!raycaster) return null;
+            raycaster.setFromCamera({ x: mousePos.x / canvas.width * 2 - 1, y: -(mousePos.y / canvas.height) * 2 + 1 }, camera);
+            const pt = new THREE.Vector3();
+            if (!raycaster.ray.intersectPlane(groundPlane, pt)) return null;
+            return Math.atan2(pt.z - myPlayer.y, pt.x - myPlayer.x);
+        }
+        function updateCamera(fx, fy, a) {
+            const cs = Math.cos(a), sn = Math.sin(a);
+            if (view === 'top') { camera.position.set(fx, 620, fy + 460); camera.lookAt(fx, 0, fy); }
+            else if (view === 'third') { camera.position.set(fx - cs * 190, 120, fy - sn * 190); camera.lookAt(fx + cs * 260, 30, fy + sn * 260); }
+            else { camera.position.set(fx + cs * 6, 38, fy + sn * 6); camera.lookAt(fx + cs * 300, 36, fy + sn * 300); }
+        }
+        function toScreen(x, h, z) {
+            proj.set(x, h, z).project(camera);
+            if (proj.z > 1) return null;
+            return { x: (proj.x * 0.5 + 0.5) * canvas.width, y: (-proj.y * 0.5 + 0.5) * canvas.height };
+        }
+        function placeSoldier(id, p, x, y, ang, hidden, seen) {
+            const sig = `${p.color}|${p.helmet}`;
+            let g = playerMeshes.get(id);
+            if (g && g.userData.sig !== sig) { scene.remove(g); disposeObj(g); g = null; }
+            if (!g) { g = makeSoldier(p); playerMeshes.set(id, g); scene.add(g); }
+            g.position.set(x, GY, y); g.rotation.y = -ang; g.visible = !hidden; g.userData.crown.visible = (p.kills || 0) >= 2; seen.add(id);
+        }
+
+        function syncScene(dt, focusId) {
+            const seen = new Set();
+            labels.length = 0;
+            const fp = view === 'first';
+            Object.values(players).forEach(p => {
+                if (p.id === localPlayerId || !p.alive || p.x == null) return;
+                const d = disp[p.id] || (disp[p.id] = { x: p.x, y: p.y });
+                const mv = Math.hypot(p.x - d.x, p.y - d.y);
+                d.x += (p.x - d.x) * 0.25; d.y += (p.y - d.y) * 0.25;
+                if (mv > 3 && Date.now() - (d.step || 0) > 380) { d.step = Date.now(); const sp = SFX.spatial(d.x, d.y); if (sp.vol > 0.05) SFX.step(sp, 0.7); }
+                placeSoldier(p.id, p, d.x, d.y, p.angle || 0, fp && focusId === p.id, seen);
+                labels.push({ id: p.id, name: p.name, hp: p.hp, kills: p.kills, x: d.x, y: d.y });
+            });
+            if (!myPlayer.isDead) {
+                const hide = fp && focusId === localPlayerId;
+                placeSoldier(localPlayerId, myPlayer, myPlayer.x, myPlayer.y, myPlayer.angle, hide, seen);
+                if (!hide) labels.push({ id: localPlayerId, name: myPlayer.name, hp: myPlayer.hp, kills: myPlayer.kills, x: myPlayer.x, y: myPlayer.y });
+            }
+            playerMeshes.forEach((g, id) => { if (!seen.has(id)) { scene.remove(g); disposeObj(g); playerMeshes.delete(id); } });
+
+            lootCrates.forEach(c => {
+                let g = crateMeshes.get(c);
+                if (!g) { g = makeCrate(c); g.position.set(c.x, GY, c.y); crateMeshes.set(c, g); scene.add(g); }
+                g.rotation.y += 0.01 * dt / 16.667;
+                g.userData.box.position.y = 15 + Math.sin(Date.now() / 400 + c.x) * 3;
+            });
+            crateMeshes.forEach((g, c) => { if (!lootCrates.includes(c)) { scene.remove(g); disposeObj(g); crateMeshes.delete(c); } });
+
+            let i = 0;
+            bullets.forEach(b => {
+                let m = bulletPool[i];
+                if (!m) { m = new THREE.Mesh(new THREE.BoxGeometry(18, 2.4, 2.4), new THREE.MeshBasicMaterial({ color: 0xfef08a })); scene.add(m); bulletPool.push(m); }
+                if (m.userData.c !== b.color) { m.material.color.set(b.color || '#fef08a'); m.userData.c = b.color; }
+                m.visible = true;
+                m.position.set(b.x - b.vx * 0.75, 26, b.y - b.vy * 0.75);
+                m.rotation.y = -Math.atan2(b.vy, b.vx);
+                i++;
+            });
+            for (; i < bulletPool.length; i++) bulletPool[i].visible = false;
+
+            let j = 0;
+            particles.forEach(p => {
+                let m = fxPool[j];
+                if (!m) { m = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), new THREE.MeshBasicMaterial({ color: 0xf97316, transparent: true, depthWrite: false })); scene.add(m); fxPool.push(m); }
+                const s = 10 + 110 * (1 - p.life / 450);
+                m.visible = true; m.scale.set(s, s, s); m.position.set(p.x, 20, p.y); m.material.opacity = (p.life / 450) * 0.6;
+                j++;
+            });
+            for (; j < fxPool.length; j++) fxPool[j].visible = false;
+
+            const nowS = Date.now();
+            meteors.forEach(m => {
+                let g = meteorMeshes.get(m);
+                if (!g) {
+                    g = new THREE.Group();
+                    const ring = new THREE.Mesh(new THREE.RingGeometry(88, 100, 40), new THREE.MeshBasicMaterial({ color: 0xef4444, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+                    ring.rotation.x = -Math.PI / 2; ring.position.y = GY + 1;
+                    const disc = new THREE.Mesh(new THREE.CircleGeometry(100, 32), new THREE.MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
+                    disc.rotation.x = -Math.PI / 2; disc.position.y = GY + 0.8;
+                    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(28, 0), new THREE.MeshBasicMaterial({ color: 0xf97316 }));
+                    g.add(ring, disc, rock); g.userData = { ring, disc, rock }; g.position.set(m.x, 0, m.y);
+                    meteorMeshes.set(m, g); scene.add(g);
+                }
+                const f = Math.min(1, (nowS - m.t0) / 2200);
+                g.userData.rock.visible = !m.done; g.userData.ring.visible = !m.done; g.userData.disc.visible = !m.done;
+                g.userData.rock.position.y = GY + 30 + (1 - f) * (1 - f) * 1000;
+                g.userData.rock.rotation.x += 0.1;
+                g.userData.ring.material.opacity = 0.45 + 0.3 * Math.sin(nowS / 80);
+            });
+            meteorMeshes.forEach((g, m) => { if (!meteors.includes(m)) { scene.remove(g); disposeObj(g); meteorMeshes.delete(m); } });
+
+            stormWall.position.x = storm.x; stormWall.position.z = storm.y;
+            stormWall.scale.set(storm.radius, 1, storm.radius);
+        }
+
+        function xMark(x, y, size, col) {
+            ctx.lineCap = "round";
+            [["#ffffff", 7], [col, 4]].forEach(([c, w]) => {
+                ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath();
+                ctx.moveTo(x - size, y - size); ctx.lineTo(x + size, y + size); ctx.moveTo(x + size, y - size); ctx.lineTo(x - size, y + size);
+                ctx.stroke();
+            });
+            ctx.lineCap = "butt";
+        }
+        function drawOverlay(dt, fx, fy, fa) {
+            const W = canvas.width, H = canvas.height, now = Date.now();
+            // Loot names
+            lootCrates.forEach(c => {
+                if (Math.hypot(c.x - cam.x, c.y - cam.y) > 700) return;
+                const s = toScreen(c.x, 64, c.y); if (!s) return;
+                const R = RARITY[c.rar];
+                const name = c.kind === 'weapon' ? `${R.n} ${WEAPONS[c.type].name}` : c.kind === 'armor' ? `${R.n} Armor +${ARMOR_BY_RARITY[c.rar]}` : (c.rar >= 2 ? 'Double Medkit' : 'Medkit');
+                ctx.font = "bold 13px Rajdhani"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000";
+                ctx.strokeText(name, s.x, s.y); ctx.fillStyle = R.c; ctx.fillText(name, s.x, s.y);
+            });
+            // Nameplates + health bars (red name = you are aiming at them, gold = wanted)
+            labels.forEach(l => {
+                const s = toScreen(l.x, 66, l.y);
+                if (!s || Math.hypot(l.x - cam.x, l.y - cam.y) > 1400) return;
+                const wanted = (l.kills || 0) >= 2, locked = l.id === lockedId;
+                ctx.font = "bold 13px Rajdhani"; ctx.textAlign = "center";
+                if (wanted) { ctx.fillStyle = "#facc15"; ctx.fillText("WANTED", s.x, s.y - 22); }
+                ctx.fillStyle = locked ? "#ef4444" : wanted ? "#facc15" : "#ffffff";
+                ctx.fillText(l.name || "Operator", s.x, s.y - 8);
+                ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(s.x - 22, s.y - 4, 44, 5);
+                ctx.fillStyle = locked ? "#ef4444" : "#10b981"; ctx.fillRect(s.x - 22, s.y - 4, Math.max(0, Math.min(1, (l.hp ?? 100) / 100)) * 44, 5);
+            });
+            // Floating damage / pickup numbers
+            for (let i = floatTexts.length - 1; i >= 0; i--) {
+                const f = floatTexts[i];
+                f.life -= dt;
+                if (f.life <= 0) { floatTexts.splice(i, 1); continue; }
+                f.hh = (f.hh || 40) + dt * 0.05;
+                const s = toScreen(f.x, f.hh, f.y);
+                if (!s) continue;
+                ctx.globalAlpha = Math.min(1, f.life / 400);
+                ctx.font = "bold 20px Rajdhani"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000";
+                ctx.strokeText(f.txt, s.x, s.y); ctx.fillStyle = f.c; ctx.fillText(f.txt, s.x, s.y);
+                ctx.globalAlpha = 1;
+            }
+            // Meteor warning
+            if (!myPlayer.isDead && meteors.some(m => !m.done && Math.hypot(myPlayer.x - m.x, myPlayer.y - m.y) < 170)) {
+                ctx.globalAlpha = 0.6 + 0.4 * Math.sin(now / 90);
+                ctx.font = "bold 34px Teko"; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.fillStyle = "#ef4444";
+                ctx.strokeText("METEOR INCOMING - MOVE!", W / 2, H * 0.28); ctx.fillText("METEOR INCOMING - MOVE!", W / 2, H * 0.28);
+                ctx.globalAlpha = 1;
+            }
+            // Reload bar
+            if (myPlayer.reloading && !myPlayer.isDead) {
+                const left = Math.max(0, myPlayer.reloading - now), bw = 120;
+                ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W / 2 - bw / 2, H * 0.62, bw, 8);
+                ctx.fillStyle = "#fbbf24"; ctx.fillRect(W / 2 - bw / 2, H * 0.62, bw * (1 - left / myPlayer.reloadTotal), 8);
+                ctx.font = "bold 12px Rajdhani"; ctx.textAlign = "center"; ctx.fillText("RELOADING", W / 2, H * 0.62 + 22);
+            }
+            // Aim reticle: turns red on an enemy, red X on hit, big X + name on kill
+            if (!myPlayer.isDead && !spectating) {
+                const ca = Math.cos(fa), sa = Math.sin(fa);
+                let ax = W / 2, ay = H / 2;
+                if (view === 'top') {
+                    if (touchAim.x === 0 && touchAim.y === 0 && mouseSeen) { ax = mousePos.x; ay = mousePos.y; }
+                    else { const s = toScreen(fx + ca * 260, 22, fy + sa * 260); if (s) { ax = s.x; ay = s.y; } }
+                    const ps = toScreen(fx, 28, fy);
+                    if (ps) {
+                        ctx.strokeStyle = aimOnEnemy ? "rgba(239,68,68,0.55)" : "rgba(255,255,255,0.2)"; ctx.lineWidth = 2;
+                        ctx.beginPath(); ctx.moveTo(ps.x, ps.y); ctx.lineTo(ax, ay); ctx.stroke();
+                    }
+                }
+                const col = aimOnEnemy ? "#ef4444" : "rgba(255,255,255,0.92)";
+                ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+                ctx.beginPath(); ctx.arc(ax, ay, 12, 0, Math.PI * 2); ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(ax - 20, ay); ctx.lineTo(ax - 8, ay); ctx.moveTo(ax + 8, ay); ctx.lineTo(ax + 20, ay);
+                ctx.moveTo(ax, ay - 20); ctx.lineTo(ax, ay - 8); ctx.moveTo(ax, ay + 8); ctx.lineTo(ax, ay + 20);
+                ctx.stroke();
+                if (aimOnEnemy) { ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(ax, ay, 2.5, 0, Math.PI * 2); ctx.fill(); }
+                if (now - hitMarker < 220) xMark(ax, ay, 11, "#ef4444");
+                const kt = now - killFlash;
+                if (kt < 1300) {
+                    ctx.globalAlpha = 1 - kt / 1300;
+                    xMark(ax, ay, 20, "#ef4444");
+                    ctx.font = "bold 32px Teko"; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.fillStyle = "#ef4444";
+                    ctx.strokeText(`ELIMINATED ${killName}`, W / 2, H * 0.36); ctx.fillText(`ELIMINATED ${killName}`, W / 2, H * 0.36);
+                    ctx.globalAlpha = 1;
+                }
+            }
         }
 
         function render(now) {
             const dt = Math.min(50, now - (lastFrame || now));
             lastFrame = now;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            if (gameState !== "PLAYING" && gameState !== "ENDED") {
-                requestAnimationFrame(render);
-                return;
-            }
+            viewBtn.classList.toggle('hidden', gameState !== 'PLAYING');
+            canvas.style.cursor = (gameState === 'PLAYING' && !myPlayer.isDead) ? 'none' : 'default';
+            if ((gameState !== "PLAYING" && gameState !== "ENDED") || !renderer) { requestAnimationFrame(render); return; }
 
             if (gameState === "PLAYING") {
                 updatePlayerPosition(dt);
-                if (myPlayer.reloading && Date.now() >= myPlayer.reloading) { myPlayer.ammo = WEAPONS[myPlayer.weapon].ammoMax; myPlayer.reloading = 0; }
+                if (myPlayer.reloading && Date.now() >= myPlayer.reloading) { myPlayer.ammo = WEAPONS[myPlayer.weapon].ammoMax; myPlayer.reloading = 0; SFX.reloadDone(); }
                 myPlayer.skillCooldown = Math.max(0, myPlayer.skillCooldown - dt);
                 storm.radius = Math.max(STORM_MIN, STORM_START - (Date.now() - matchStartT) / 1000 * STORM_SHRINK);
-                if (!myPlayer.isDead && Math.hypot(myPlayer.x - storm.x, myPlayer.y - storm.y) > storm.radius) hurt(STORM_DPS * dt / 1000, false);
+                if (!myPlayer.isDead && Math.hypot(myPlayer.x - storm.x, myPlayer.y - storm.y) > storm.radius) {
+                    hurt(STORM_DPS * dt / 1000, false);
+                    if (Date.now() - lastStormTick > 800) { lastStormTick = Date.now(); SFX.stormTick(); }
+                }
                 if (Date.now() - lastSync > 80) { lastSync = Date.now(); syncPos(); checkMatchEnd(); }
             }
 
+            // Camera focus (self or spectated player)
+            let fx = myPlayer.x, fy = myPlayer.y, fa = myPlayer.angle, focusId = localPlayerId;
             if (spectating) {
                 const t = players[specId];
                 if (!t || !t.alive) cycleSpec(1);
@@ -1148,126 +1767,43 @@
                 cam.x += ((d ? d.x : cam.x) - cam.x) * 0.15;
                 cam.y += ((d ? d.y : cam.y) - cam.y) * 0.15;
                 $('specName').textContent = (players[specId] && players[specId].name) || '-';
+                updateGhostUI();
+                fx = cam.x; fy = cam.y; focusId = specId;
+                if (t && t.angle != null) fa = t.angle;
             } else { cam.x = myPlayer.x; cam.y = myPlayer.y; }
+            updateCamera(fx, fy, fa);
 
-            ctx.save();
-            ctx.translate(canvas.width / 2 - cam.x, canvas.height / 2 - cam.y);
-
-            // A. Island
-            ctx.fillStyle = "#0284c7";
-            ctx.fillRect(0, 0, MAP_SIZE, MAP_SIZE);
-            ctx.fillStyle = "#fde047";
-            ctx.beginPath(); ctx.arc(MAP_SIZE / 2, MAP_SIZE / 2, ISLAND_RADIUS + 25, 0, Math.PI * 2); ctx.fill();
-            ctx.fillStyle = "#15803d";
-            ctx.beginPath(); ctx.arc(MAP_SIZE / 2, MAP_SIZE / 2, ISLAND_RADIUS, 0, Math.PI * 2); ctx.fill();
-
-            // B. Obstacles
-            OBSTACLES.forEach(obs => {
-                if (obs.type === 'warehouse') {
-                    ctx.fillStyle = "#334155";
-                    ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
-                    ctx.fillStyle = "#1e293b";
-                    for (let i = 0; i < obs.w; i += 20) ctx.fillRect(obs.x + i, obs.y, 10, obs.h);
-                    ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 4;
-                    ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
-                } else if (obs.type === 'lake') {
-                    ctx.fillStyle = "#0ea5e9";
-                    ctx.beginPath(); ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI * 2); ctx.fill();
-                    ctx.strokeStyle = "#7dd3fc"; ctx.lineWidth = 5; ctx.stroke();
-                } else if (obs.type === 'tree') {
-                    ctx.fillStyle = "#166534";
-                    ctx.beginPath(); ctx.arc(obs.x, obs.y, 26, 0, Math.PI * 2); ctx.fill();
-                    ctx.fillStyle = "#15803d";
-                    ctx.beginPath(); ctx.arc(obs.x - 4, obs.y - 4, 15, 0, Math.PI * 2); ctx.fill();
-                } else {
-                    ctx.fillStyle = "#64748b";
-                    ctx.beginPath(); ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI * 2); ctx.fill();
-                    ctx.strokeStyle = "#475569"; ctx.lineWidth = 4; ctx.stroke();
-                }
-            });
-
-            // C. Loot crates (border colour = rarity)
-            lootCrates.forEach(c => {
-                const R = RARITY[c.rar];
-                ctx.fillStyle = c.kind === 'weapon' ? "#854d0e" : c.kind === 'armor' ? "#1d4ed8" : "#047857";
-                ctx.shadowColor = R.c; ctx.shadowBlur = c.rar >= 2 ? 16 : 0;
-                ctx.fillRect(c.x - 14, c.y - 14, 28, 28);
-                ctx.shadowBlur = 0;
-                ctx.strokeStyle = R.c; ctx.lineWidth = 3;
-                ctx.strokeRect(c.x - 14, c.y - 14, 28, 28);
-                ctx.fillStyle = "#ffffff"; ctx.font = "bold 14px Rajdhani"; ctx.textAlign = "center";
-                ctx.fillText(c.kind === 'weapon' ? 'W' : c.kind === 'armor' ? 'A' : '+', c.x, c.y + 5);
-                ctx.fillStyle = R.c; ctx.font = "bold 10px Rajdhani";
-                ctx.fillText((c.kind === 'weapon' ? c.type : c.kind).toUpperCase(), c.x, c.y - 19);
-            });
-
-            // D. Storm ring + outside tint
-            ctx.strokeStyle = "rgba(59, 130, 246, 0.8)"; ctx.lineWidth = 6;
-            ctx.beginPath(); ctx.arc(storm.x, storm.y, storm.radius, 0, Math.PI * 2); ctx.stroke();
-
-            // Fire blasts
-            for (let i = particles.length - 1; i >= 0; i--) {
-                const p = particles[i];
-                p.life -= dt;
-                if (p.life <= 0) { particles.splice(i, 1); continue; }
-                ctx.fillStyle = `rgba(249,115,22,${(p.life / 450) * 0.6})`;
-                ctx.beginPath(); ctx.arc(p.x, p.y, 10 + 110 * (1 - p.life / 450), 0, Math.PI * 2); ctx.fill();
-            }
-
-            // E. Bullets (frame-rate independent, sub-stepped)
+            // Bullets: movement + hit detection
             const k = dt / 16.667, steps = Math.max(1, Math.ceil(k));
             for (let i = bullets.length - 1; i >= 0; i--) {
                 const b = bullets[i];
                 let gone = false;
                 for (let st = 0; st < steps && !gone; st++) {
                     b.x += b.vx * k / steps; b.y += b.vy * k / steps;
-                    if (b.ownerId !== localPlayerId && !myPlayer.isDead && gameState === 'PLAYING' && Math.hypot(myPlayer.x - b.x, myPlayer.y - b.y) < 22) {
-                        hurt(b.damage, true, { by: b.ownerId, wn: b.wn }); gone = true;
-                    } else if (checkObstacleCollision(b.x, b.y, 4, true)) gone = true;
+                    const tgt = b.ownerId === localPlayerId ? bulletTarget(b) : null;
+                    if (tgt) { registerHit(b, tgt); gone = true; }
+                    else if (checkObstacleCollision(b.x, b.y, 4, true)) gone = true;
                 }
                 b.life -= dt;
-                if (gone || b.life <= 0) { bullets.splice(i, 1); continue; }
-                ctx.strokeStyle = b.color || "#fef08a"; ctx.lineWidth = 3;
-                ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 1.5, b.y - b.vy * 1.5); ctx.stroke();
+                if (gone || b.life <= 0) bullets.splice(i, 1);
             }
-
-            // F. Players: remote (smoothed) then local on top
-            Object.values(players).forEach(p => {
-                if (p.id === localPlayerId || !p.alive || p.x == null) return;
-                const d = disp[p.id] || (disp[p.id] = { x: p.x, y: p.y });
-                d.x += (p.x - d.x) * 0.25; d.y += (p.y - d.y) * 0.25;
-                drawPlayer(p, d.x, d.y, p.angle, p.hp);
-            });
-            if (!myPlayer.isDead) {
-                drawPlayer(myPlayer, myPlayer.x, myPlayer.y, myPlayer.angle, myPlayer.hp);
-                if (myPlayer.reloading) {
-                    const left = Math.max(0, myPlayer.reloading - Date.now());
-                    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(myPlayer.x - 20, myPlayer.y + 26, 40, 5);
-                    ctx.fillStyle = "#fbbf24"; ctx.fillRect(myPlayer.x - 20, myPlayer.y + 26, 40 * (1 - left / myPlayer.reloadTotal), 5);
-                    ctx.font = "bold 10px Rajdhani"; ctx.textAlign = "center"; ctx.fillText("RELOADING", myPlayer.x, myPlayer.y + 42);
+            for (let i = particles.length - 1; i >= 0; i--) { particles[i].life -= dt; if (particles[i].life <= 0) particles.splice(i, 1); }
+            const nowT = Date.now();
+            for (let i = meteors.length - 1; i >= 0; i--) {
+                const m = meteors[i], age = nowT - m.t0;
+                if (age >= 2200 && !m.done) {
+                    m.done = true; particles.push({ x: m.x, y: m.y, life: 450 }); SFX.boom(SFX.spatial(m.x, m.y), 1.4);
+                    if (!myPlayer.isDead && gameState === 'PLAYING' && Math.hypot(myPlayer.x - m.x, myPlayer.y - m.y) < 100) hurt(35, true, { by: m.by, wn: 'Meteor' });
                 }
-            }
-            for (let i = floatTexts.length - 1; i >= 0; i--) {
-                const f = floatTexts[i];
-                f.life -= dt;
-                if (f.life <= 0) { floatTexts.splice(i, 1); continue; }
-                f.y -= dt * 0.04;
-                ctx.globalAlpha = Math.min(1, f.life / 400);
-                ctx.font = "bold 18px Rajdhani"; ctx.textAlign = "center"; ctx.lineWidth = 3; ctx.strokeStyle = "#000";
-                ctx.strokeText(f.txt, f.x, f.y); ctx.fillStyle = f.c; ctx.fillText(f.txt, f.x, f.y);
-                ctx.globalAlpha = 1;
+                if (age > 2800) meteors.splice(i, 1);
             }
 
-            ctx.restore();
+            updateAimLock();
+            syncScene(dt, focusId);
+            renderer.render(scene, camera);
+            drawOverlay(dt, fx, fy, fa);
 
-            if (Date.now() - hitMarker < 180) {
-                const hx = canvas.width / 2 + Math.cos(myPlayer.angle) * 42, hy = canvas.height / 2 + Math.sin(myPlayer.angle) * 42;
-                ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 3; ctx.beginPath();
-                ctx.moveTo(hx - 8, hy - 8); ctx.lineTo(hx + 8, hy + 8); ctx.moveTo(hx + 8, hy - 8); ctx.lineTo(hx - 8, hy + 8);
-                ctx.stroke();
-            }
-
-            // G. HUD
+            // HUD
             $('hudHpBar').style.width = `${Math.max(0, myPlayer.hp)}%`;
             $('hudHpText').textContent = `${Math.ceil(Math.max(0, myPlayer.hp))} / 100`;
             const R = RARITY[myPlayer.rarity];
@@ -1294,10 +1830,15 @@
             });
             mCtx.strokeStyle = "#3b82f6"; mCtx.lineWidth = 1.5;
             mCtx.beginPath(); mCtx.arc(storm.x * scale, storm.y * scale, storm.radius * scale, 0, Math.PI * 2); mCtx.stroke();
+            const nowM = Date.now();
             Object.values(players).forEach(p => {
                 if (p.id === localPlayerId || !p.alive || p.x == null) return;
-                mCtx.fillStyle = "#ef4444";
-                mCtx.beginPath(); mCtx.arc(p.x * scale, p.y * scale, 2.5, 0, Math.PI * 2); mCtx.fill();
+                const dist = Math.hypot(p.x - myPlayer.x, p.y - myPlayer.y);
+                const wanted = (p.kills || 0) >= 2, rev = (reveals[p.id] || 0) > nowM;
+                if (!(myPlayer.isDead || dist < 350 || wanted || rev)) return;
+                const pulse = 1 + 0.5 * Math.sin(nowM / 150);
+                mCtx.fillStyle = wanted ? "#facc15" : rev ? "#f97316" : "#ef4444";
+                mCtx.beginPath(); mCtx.arc(p.x * scale, p.y * scale, (wanted || rev) ? 3.5 * pulse : 2.5, 0, Math.PI * 2); mCtx.fill();
             });
             if (!myPlayer.isDead) {
                 mCtx.fillStyle = "#facc15";
